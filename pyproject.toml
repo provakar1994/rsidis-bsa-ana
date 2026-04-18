@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rsidis-ssa"
+version = "0.1.0"
+description = "Hall C RSIDIS single-spin asymmetry analysis"
+requires-python = ">=3.10"
+dependencies = [
+    "uproot>=5",
+    "awkward>=2",
+    "pandas>=2",
+    "numpy>=1.24",
+    "boost-histogram>=1.4",
+    "scipy>=1.11",
+    "matplotlib>=3.7",
+    "pyyaml>=6",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rsidis_ssa*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

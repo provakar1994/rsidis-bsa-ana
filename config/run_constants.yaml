@@ -1,0 +1,19 @@
+# ============================================================
+# Run-period-specific constants for RSIDIS SSA analysis.
+#
+# dummy_scale: ratio of dummy cell thickness to cryo cell wall
+#   thickness, used to scale the dummy-target histogram before
+#   subtraction.  Physical meaning:
+#
+#     h_cryo_wall = h_dummy / dummy_scale
+#
+#   so that only the aluminium cell-wall contribution is removed
+#   from the cryo-target data.
+#
+# Add a new top-level key for each run period.
+# ============================================================
+
+period_1:   # First run period (pass 0, 2025)
+  dummy_scale:
+    LH2: 7.2323
+    LD2: 7.7552
