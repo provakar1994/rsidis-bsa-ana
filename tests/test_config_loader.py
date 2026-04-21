@@ -74,8 +74,9 @@ MINIMAL_VALID = textwrap.dedent("""\
       ctime_real_center:          auto
       ctime_real_nsigma:          3.0
       ctime_real_window_fallback: 2.0
-      ctime_random_offset:        20.0
-      ctime_random_wscale:         6.0
+      ctime_random_n_skip:         1
+      ctime_random_n_peaks_lo:     3
+      ctime_random_n_peaks_hi:     3
 
     histograms:
       - name:   hsdelta
@@ -316,8 +317,8 @@ class TestCutsConfig:
 
     def test_unknown_cut_key_raises(self, tmp_path):
         bad = MINIMAL_VALID.replace(
-            "ctime_random_wscale:         6.0",
-            "ctime_random_wscale:         6.0\n  mystery_cut: 99",
+            "ctime_random_n_peaks_hi:     3",
+            "ctime_random_n_peaks_hi:     3\n  mystery_cut: 99",
         )
         p = _write_yaml(tmp_path, bad)
         with pytest.raises(ValueError, match="mystery_cut"):

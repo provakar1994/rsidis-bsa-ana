@@ -163,10 +163,6 @@ def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
     valid_halfwins = [h for (_, h) in windows]
     mean_ctmean    = float(np.mean(valid_ctmeans))  if valid_ctmeans  else 0.0
     mean_half_win  = float(np.mean(valid_halfwins)) if valid_halfwins else cuts.ctime_real_window_fallback
-    mean_rand_center  = float(np.mean([c for (c, _) in rand_windows if not np.isnan(c)])) \
-                        if rand_windows else mean_ctmean - cuts.ctime_random_offset
-    mean_rand_hw      = float(np.mean([h for (_, h) in rand_windows])) \
-                        if rand_windows else mean_half_win * cuts.ctime_random_wscale
 
     fig, (ax_full, ax_zoom, ax_run) = plt.subplots(1, 3, figsize=(17, 4.5))
     fig.suptitle("Coincidence-time distribution", fontsize=11, fontweight="bold")
@@ -189,18 +185,31 @@ def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
                     label=f"real: {mean_ctmean:.2f} ± {mean_half_win:.2f} ns")
     ax_full.axvline(mean_ctmean - mean_half_win, color="limegreen", lw=0.9, ls="--")
     ax_full.axvline(mean_ctmean + mean_half_win, color="limegreen", lw=0.9, ls="--")
-    # Random sideband shading (mean over runs; per-run windows shown as thin lines)
-    rand_lo = mean_rand_center - mean_rand_hw
-    rand_hi = mean_rand_center + mean_rand_hw
-    ax_full.axvspan(rand_lo, rand_hi, color="royalblue", alpha=0.15,
-                    label=f"random: {mean_rand_center:.2f} ± {mean_rand_hw:.2f} ns")
-    ax_full.axvline(rand_lo, color="royalblue", lw=0.9, ls="--")
-    ax_full.axvline(rand_hi, color="royalblue", lw=0.9, ls="--")
-    for rc, rhw in rand_windows:
-        if np.isnan(rc):
+    # Discrete random-peak shading: one axvspan per peak index, using mean center across runs.
+    # rand_windows is list[list[tuple[float,float]]]: outer = runs, inner = peaks per run.
+    n_rand_peaks = cuts.ctime_random_n_peaks_lo + cuts.ctime_random_n_peaks_hi
+    for p in range(n_rand_peaks):
+        peak_cs = [rand_windows[i][p][0]
+                   for i in range(len(rand_windows))
+                   if len(rand_windows[i]) > p and not np.isnan(rand_windows[i][p][0])]
+        peak_hs = [rand_windows[i][p][1]
+                   for i in range(len(rand_windows))
+                   if len(rand_windows[i]) > p]
+        if not peak_cs:
             continue
-        ax_full.axvline(rc - rhw, color="royalblue", lw=0.4, alpha=0.3)
-        ax_full.axvline(rc + rhw, color="royalblue", lw=0.4, alpha=0.3)
+        mc = float(np.mean(peak_cs))
+        mh = float(np.mean(peak_hs))
+        ax_full.axvspan(mc - mh, mc + mh, color="royalblue", alpha=0.15,
+                        label="random peaks (mean)" if p == 0 else "_nolegend_")
+        ax_full.axvline(mc - mh, color="royalblue", lw=0.9, ls="--")
+        ax_full.axvline(mc + mh, color="royalblue", lw=0.9, ls="--")
+    # Per-run peak boundaries (thin lines)
+    for run_peaks in rand_windows:
+        for rc, rhw in run_peaks:
+            if np.isnan(rc):
+                continue
+            ax_full.axvline(rc - rhw, color="royalblue", lw=0.4, alpha=0.3)
+            ax_full.axvline(rc + rhw, color="royalblue", lw=0.4, alpha=0.3)
     ax_full.set_title("Full range")
     ax_full.legend(fontsize=7)
 
@@ -231,8 +240,9 @@ def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
     info = (f"center: {mode_str}\n"
             f"mean ctmean = {mean_ctmean:.3f} ns\n"
             f"mean half-win = {mean_half_win:.3f} ns\n"
-            f"random offset = {cuts.ctime_random_offset:.1f} ns\n"
-            f"random wscale = {cuts.ctime_random_wscale:.1f}  (win_scale = 1/{cuts.ctime_random_wscale:.0f})\n"
+            f"n_skip = {cuts.ctime_random_n_skip}  "
+            f"n_peaks = {cuts.ctime_random_n_peaks_lo}+{cuts.ctime_random_n_peaks_hi}\n"
+            f"win_scale = 1/{n_rand_peaks}\n"
             f"N runs = {n_runs}")
     ax_zoom.text(0.02, 0.97, info, transform=ax_zoom.transAxes,
                  va="top", ha="left", fontsize=7, family="monospace",

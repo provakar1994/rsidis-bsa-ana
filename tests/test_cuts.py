@@ -57,8 +57,9 @@ def cuts_cfg() -> CutsConfig:
         ctime_real_center="auto",
         ctime_real_nsigma=3.0,
         ctime_real_window_fallback=2.0,
-        ctime_random_offset=20.0,
-        ctime_random_wscale=6.0,
+        ctime_random_n_skip=1,
+        ctime_random_n_peaks_lo=3,
+        ctime_random_n_peaks_hi=3,
     )
 
 
@@ -271,8 +272,9 @@ class TestRealCtimeMask:
             ctime_real_center=51.2,
             ctime_real_nsigma=3.0,
             ctime_real_window_fallback=2.0,
-            ctime_random_offset=20.0,
-            ctime_random_wscale=6.0,
+            ctime_random_n_skip=1,
+            ctime_random_n_peaks_lo=3,
+            ctime_random_n_peaks_hi=3,
         )
         arrays = _make_arrays(ctime=51.2)
         mask = real_ctime_mask(arrays, cfg, ctmean=None, ctsigma=None)
@@ -292,8 +294,9 @@ class TestRealCtimeMask:
             ctime_real_center=51.2,
             ctime_real_nsigma=3.0,
             ctime_real_window_fallback=2.0,
-            ctime_random_offset=20.0,
-            ctime_random_wscale=6.0,
+            ctime_random_n_skip=1,
+            ctime_random_n_peaks_lo=3,
+            ctime_random_n_peaks_hi=3,
         )
         arrays = _make_arrays(ctime=54.0)  # |54.0 − 51.2| = 2.8 > 2.0 → fail
         mask = real_ctime_mask(arrays, cfg, ctmean=None, ctsigma=None)
@@ -305,30 +308,71 @@ class TestRealCtimeMask:
 # ===========================================================================
 
 class TestRandomCtimeMask:
-    # offset=20.0, ctmean=51.2 → random_center=31.2
-    # wscale=6.0, beam_bunch_ns=4.0 → random_half_win = 6.0×2.0 = 12.0 ns
-    # sideband: |ctime - 31.2| <= 12.0  →  [19.2, 43.2]
-    _RHW = 12.0   # random_half_win for these tests
+    """
+    n_skip=1, n_peaks_lo=3, n_peaks_hi=3 (from cuts_cfg fixture)
+    ctmean=51.2, real_half_win=1.0, beam_bunch_ns=4.0
 
-    def test_within_sideband_passes(self, cuts_cfg):
-        arrays = _make_arrays(ctime=31.2)   # at random center
-        mask = random_ctime_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
+    Lo peak centers: 51.2 − (1+k)×4  for k=1..3  → 43.2, 39.2, 35.2
+    Hi peak centers: 51.2 + (1+k)×4  for k=1..3  → 59.2, 63.2, 67.2
+    Each window: ±1.0 ns.  Windows do NOT overlap (half_win < beam_bunch_ns/2).
+    Skipped adjacent peaks (n_skip=1): 47.2 (lo) and 55.2 (hi).
+    """
+    _CTMEAN  = 51.2
+    _REAL_HW = 1.0
+    _BBN     = 4.0
+
+    def test_at_first_lo_peak_passes(self, cuts_cfg):
+        arrays = _make_arrays(ctime=43.2)
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
         assert mask.all()
 
-    def test_outside_sideband_fails(self, cuts_cfg):
-        arrays = _make_arrays(ctime=51.2)   # real peak → outside sideband
-        mask = random_ctime_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
-        assert not mask.any()
-
-    def test_at_sideband_edge_passes(self, cuts_cfg):
-        arrays = _make_arrays(ctime=31.2 + 12.0)   # exactly at upper edge (<=)
-        mask = random_ctime_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
+    def test_at_first_hi_peak_passes(self, cuts_cfg):
+        arrays = _make_arrays(ctime=59.2)
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
         assert mask.all()
 
-    def test_just_outside_sideband_fails(self, cuts_cfg):
-        arrays = _make_arrays(ctime=31.2 + 12.001)  # just beyond upper edge
-        mask = random_ctime_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
+    def test_at_third_lo_peak_passes(self, cuts_cfg):
+        arrays = _make_arrays(ctime=35.2)
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
+        assert mask.all()
+
+    def test_real_peak_fails(self, cuts_cfg):
+        """Real peak center is not in any random window."""
+        arrays = _make_arrays(ctime=self._CTMEAN)
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
         assert not mask.any()
+
+    def test_skipped_adjacent_lo_fails(self, cuts_cfg):
+        """Immediately adjacent lo peak (51.2 − 1×4 = 47.2) is skipped (n_skip=1)."""
+        arrays = _make_arrays(ctime=47.2)
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
+        assert not mask.any()
+
+    def test_at_lo_peak_edge_passes(self, cuts_cfg):
+        """Edge of first lo peak window: 43.2 + 1.0 = 44.2 (≤, inclusive)."""
+        arrays = _make_arrays(ctime=43.2 + self._REAL_HW)
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
+        assert mask.all()
+
+    def test_just_beyond_lo_peak_fails(self, cuts_cfg):
+        arrays = _make_arrays(ctime=43.2 + self._REAL_HW + 0.001)
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
+        assert not mask.any()
+
+    def test_between_lo_peaks_fails(self, cuts_cfg):
+        """37.2 lies between peaks 35.2 and 39.2, outside both windows."""
+        arrays = _make_arrays(ctime=37.2)
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
+        assert not mask.any()
+
+    def test_multiple_events_selects_correct_ones(self, cuts_cfg):
+        """Events at peak centers pass; events at real peak or skipped peak fail."""
+        ctimes   = np.array([43.2, 51.2, 59.2, 47.2, 35.2])
+        expected = np.array([True, False, True, False, True])
+        arrays = _make_arrays(n=5)
+        arrays[BRANCH_CTIME] = ctimes
+        mask = random_ctime_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
+        np.testing.assert_array_equal(mask, expected)
 
 
 # ===========================================================================
@@ -362,18 +406,27 @@ class TestBuildRealMask:
 
 
 class TestBuildRandomMask:
-    # wscale=6.0, beam_bunch_ns=4.0 → random_half_win = 6.0×2.0 = 12.0 ns
-    # ctmean=51.2, offset=20.0 → random_center=31.2 → sideband [19.2, 43.2]
-    _RHW = 12.0
+    """Combined PID + discrete random-ctime mask."""
+    _CTMEAN  = 51.2
+    _REAL_HW = 1.0
+    _BBN     = 4.0
 
     def test_all_pass(self, cuts_cfg):
-        arrays = _make_arrays(ctime=31.2)   # at random center → inside
-        mask = build_random_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
+        """Good PID + ctime at first lo random peak (43.2) → passes."""
+        arrays = _make_arrays(ctime=43.2)
+        mask = build_random_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
         assert mask.all()
 
-    def test_real_ctime_not_in_sideband(self, cuts_cfg):
-        arrays = _make_arrays(ctime=51.2)   # real peak → outside sideband
-        mask = build_random_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
+    def test_bad_pid_fails(self, cuts_cfg):
+        """Ctime inside a random window but bad PID → fails."""
+        arrays = _make_arrays(ctime=43.2, hcer_npe=0.0)
+        mask = build_random_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
+        assert not mask.any()
+
+    def test_real_ctime_not_selected(self, cuts_cfg):
+        """Real peak ctime is not in any random window."""
+        arrays = _make_arrays(ctime=self._CTMEAN)
+        mask = build_random_mask(arrays, cuts_cfg, self._CTMEAN, self._REAL_HW, self._BBN)
         assert not mask.any()
 
 

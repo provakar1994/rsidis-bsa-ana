@@ -53,12 +53,15 @@ cuts:
 
   # Coincidence time — real peak
   ctime_real_center:          auto
-  ctime_real_nsigma:          3.0
+  ctime_real_nsigma:          3.0   # ± n * ctsigma around the peak or null ← use fallback window always
   ctime_real_window_fallback: 2.0
 
-  # Coincidence time — random sideband (relative to real peak, per run)
-  ctime_random_offset: 18.0
-  ctime_random_wscale:  6.0
+  # Coincidence time — random sideband (discrete windows around beam-bunch peaks)
+  # Peak centers: ctmean ± (n_skip + k) × beam_bunch_ns  for k = 1…n_peaks
+  # win_scale = 1 / (n_peaks_lo + n_peaks_hi)  (constant)
+  ctime_random_n_skip:     1   # beam-bunch peaks to skip on each side of real peak (≥ 1)
+  ctime_random_n_peaks_lo: 6   # random peaks to use on the low-ctime side
+  ctime_random_n_peaks_hi: 0   # random peaks to use on the high-ctime side
 
 # ---- Histograms ----
 histograms:

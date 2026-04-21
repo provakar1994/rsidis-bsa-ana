@@ -142,13 +142,23 @@ class CutsConfig(BaseModel):
     ctime_real_window_fallback — fixed half-width [ns] used when ctsigma is
                          NaN/missing, or when ctime_real_nsigma is null.
 
-    Random sideband — defined relative to the real peak (per run):
-    ctime_random_offset — distance between the real-peak center and the
-                          center of the random sideband block [ns].
-                          random_center_r = ctmean_r − ctime_random_offset
-    ctime_random_wscale — ratio of random half-width to real half-width.
-                          random_half_win_r = real_half_win_r × ctime_random_wscale
-                          win_scale (used for normalisation) = 1 / ctime_random_wscale
+    Random sideband — discrete windows around individual beam-bunch peaks:
+    ctime_random_n_skip     — number of beam-bunch peaks to skip on each side
+                              of the real peak before starting the random
+                              windows.  Must be ≥ 1 (the immediately adjacent
+                              peaks are always excluded).
+    ctime_random_n_peaks_lo — number of random peaks to use on the low-ctime
+                              (negative-offset) side of the real peak.  0 means
+                              no peaks on this side (one-sided sideband).
+    ctime_random_n_peaks_hi — number of random peaks to use on the high-ctime
+                              (positive-offset) side.  0 means no peaks on this
+                              side.  lo + hi must be ≥ 1.
+
+    The k-th random peak center on the lo side:
+        center_k = ctmean − (n_skip + k) × beam_bunch_ns   for k = 1 … n_peaks_lo
+
+    Each random window uses the same half-width as the real peak.
+    win_scale = 1 / (n_peaks_lo + n_peaks_hi)  (area ratio, constant per run).
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -170,9 +180,10 @@ class CutsConfig(BaseModel):
     ctime_real_nsigma:          Optional[float]   # null → always use ctime_real_window_fallback
     ctime_real_window_fallback: float
 
-    # Coincidence time — random sideband (relative to real peak, per run)
-    ctime_random_offset: float   # distance from real-peak center to random-block center [ns]
-    ctime_random_wscale: float   # random half-width / real half-width  (win_scale = 1/wscale)
+    # Coincidence time — random sideband (discrete peaks, relative to real peak)
+    ctime_random_n_skip:     int   # beam-bunch peaks to skip each side of real peak (≥ 1)
+    ctime_random_n_peaks_lo: int   # random peaks to use on the low-ctime side (≥ 0; total lo+hi ≥ 1)
+    ctime_random_n_peaks_hi: int   # random peaks to use on the high-ctime side (≥ 0; total lo+hi ≥ 1)
 
     @model_validator(mode="after")
     def hsdelta_lo_lt_hi(self) -> "CutsConfig":
@@ -193,7 +204,6 @@ class CutsConfig(BaseModel):
     @field_validator(
         "hcer_npe_min", "hsshsum_min", "paero_npe_min", "phgc_npe_min",
         "ctime_real_window_fallback",
-        "ctime_random_offset", "ctime_random_wscale",
         mode="after",
     )
     @classmethod
@@ -201,6 +211,30 @@ class CutsConfig(BaseModel):
         if v <= 0:
             raise ValueError(f"Value must be > 0, got {v}")
         return v
+
+    @field_validator("ctime_random_n_skip", mode="after")
+    @classmethod
+    def n_skip_must_be_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"ctime_random_n_skip must be ≥ 1, got {v}")
+        return v
+
+    @field_validator("ctime_random_n_peaks_lo", "ctime_random_n_peaks_hi", mode="after")
+    @classmethod
+    def n_peaks_must_be_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"Value must be ≥ 0, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def total_random_peaks_must_be_positive(self) -> "CutsConfig":
+        total = self.ctime_random_n_peaks_lo + self.ctime_random_n_peaks_hi
+        if total < 1:
+            raise ValueError(
+                f"ctime_random_n_peaks_lo + ctime_random_n_peaks_hi must be ≥ 1, "
+                f"got {self.ctime_random_n_peaks_lo} + {self.ctime_random_n_peaks_hi} = {total}"
+            )
+        return self
 
     @field_validator("ctime_real_nsigma", mode="after")
     @classmethod

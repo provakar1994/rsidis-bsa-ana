@@ -200,18 +200,23 @@ def random_ctime_mask(
     arrays: dict[str, np.ndarray],
     cuts_cfg: CutsConfig,
     ctmean: float,
-    random_half_win: float,
+    real_half_win: float,
+    beam_bunch_ns: float,
 ) -> np.ndarray:
     """
     Boolean mask for the random coincidence-time sideband.
 
-    The sideband center shifts per run; the half-window is a pre-computed
-    constant (caller's responsibility):
+    Selects events inside the union of discrete windows around individual
+    beam-bunch peaks.  The first ``ctime_random_n_skip`` peaks on each side
+    of the real peak are excluded; the next ``ctime_random_n_peaks_lo``
+    (lo side) and ``ctime_random_n_peaks_hi`` (hi side) peaks are used.
 
-        random_center   = ctmean − ctime_random_offset
-        random_half_win = ctime_random_wscale × (beam_bunch_ns / 2)   [caller]
+    Each random window uses the same half-width as the real peak so that the
+    per-window statistics are directly comparable.
 
-    Window: |ctime − random_center| ≤ random_half_win
+    Peak centers:
+        lo side: ctmean − (n_skip + k) × beam_bunch_ns,  k = 1 … n_peaks_lo
+        hi side: ctmean + (n_skip + k) × beam_bunch_ns,  k = 1 … n_peaks_hi
 
     Parameters
     ----------
@@ -220,16 +225,27 @@ def random_ctime_mask(
     cuts_cfg : CutsConfig
     ctmean : float
         Per-run coincidence-time mean of the real peak [ns].
-    random_half_win : float
-        Half-width of the random sideband window [ns].
-        = ctime_random_wscale × (beam_bunch_ns / 2), constant per run period.
+    real_half_win : float
+        Half-width of the real peak window [ns].  The same window is applied
+        to every random peak.
+    beam_bunch_ns : float
+        Beam bunch spacing [ns].  Loaded from run_constants.yaml.
 
     Returns
     -------
     np.ndarray of bool
     """
-    random_center = ctmean - cuts_cfg.ctime_random_offset
-    return np.abs(arrays[BRANCH_CTIME] - random_center) <= random_half_win
+    ctime  = arrays[BRANCH_CTIME]
+    mask   = np.zeros(len(ctime), dtype=bool)
+    n_skip = cuts_cfg.ctime_random_n_skip
+    bbn    = beam_bunch_ns
+    for k in range(1, cuts_cfg.ctime_random_n_peaks_lo + 1):
+        center = ctmean - (n_skip + k) * bbn
+        mask  |= np.abs(ctime - center) <= real_half_win
+    for k in range(1, cuts_cfg.ctime_random_n_peaks_hi + 1):
+        center = ctmean + (n_skip + k) * bbn
+        mask  |= np.abs(ctime - center) <= real_half_win
+    return mask
 
 
 def build_real_mask(
@@ -246,10 +262,13 @@ def build_random_mask(
     arrays: dict[str, np.ndarray],
     cuts_cfg: CutsConfig,
     ctmean: float,
-    random_half_win: float,
+    real_half_win: float,
+    beam_bunch_ns: float,
 ) -> np.ndarray:
     """Combined PID + random coincidence-time sideband mask."""
-    return pid_mask(arrays, cuts_cfg) & random_ctime_mask(arrays, cuts_cfg, ctmean, random_half_win)
+    return pid_mask(arrays, cuts_cfg) & random_ctime_mask(
+        arrays, cuts_cfg, ctmean, real_half_win, beam_bunch_ns
+    )
 
 
 # ---------------------------------------------------------------------------

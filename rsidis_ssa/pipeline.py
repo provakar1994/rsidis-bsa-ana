@@ -11,9 +11,10 @@ Analysis pipeline: load → fill → subtract.
        - Applies PID + coincidence-time cuts.
        - Fills two registries per run type:
            real   — events in the real coincidence-time peak, weight = w_run
-           random — events in the sideband, weight = w_run × window_scale
-         where window_scale = real_half_win / random_half_win absorbs the
-         normalisation difference between the two windows.
+           random — events in the discrete random-peak windows,
+                    weight = w_run × win_scale
+         where win_scale = 1 / n_random_peaks (constant) normalises the
+         random sum to one equivalent real-window area.
   4. Returns a PipelineResult with all filled registries and metadata.
 
 Missing ROOT files are logged and skipped; the run is recorded in
@@ -103,9 +104,13 @@ class PipelineResult:
     ctime_run_windows : dict[str, list[tuple[float, float]]]
         Per-run real coincidence-time window parameters used during filling.
         Each entry is ``(ctmean, half_win)`` in ns.  Keys match ctime_hists.
-    ctime_random_run_windows : dict[str, list[tuple[float, float]]]
-        Per-run random sideband window parameters.
-        Each entry is ``(random_center, random_half_win)`` in ns.
+    ctime_random_run_windows : dict[str, list[list[tuple[float, float]]]]
+        Per-run discrete random-peak window parameters.
+        Each outer-list element corresponds to one run; the inner list holds
+        ``(center, half_win)`` for each discrete random peak used.
+        Keys match ctime_hists.
+    beam_bunch_ns : float
+        Beam bunch spacing [ns] for this run period, from run_constants.yaml.
     weight_tables : dict[str, WeightTableResult]
         Keys are "signal", "eplus", "dummy" as applicable.
     file_skips : dict[str, list[int]]
@@ -127,7 +132,8 @@ class PipelineResult:
     dummy_scale:       float
     ctime_hists:       dict[str, bh.Histogram]
     ctime_run_windows:        dict[str, list[tuple[float, float]]]
-    ctime_random_run_windows: dict[str, list[tuple[float, float]]]
+    ctime_random_run_windows: dict[str, list[list[tuple[float, float]]]]
+    beam_bunch_ns:            float
     weight_tables:            dict[str, WeightTableResult]
     file_skips:        dict[str, list[int]]
     run_dfs:           dict[str, pd.DataFrame]
@@ -167,9 +173,10 @@ def _fill_run_type(
     wt_result: WeightTableResult,
     cfg: AnalysisConfig,
     label: str,
+    beam_bunch: float,
     config_dir: Optional[Path] = None,
     ctime_override: Optional[tuple[float, float]] = None,
-) -> tuple[FilledRegistries, list[int], bh.Histogram, list[tuple[float, float]], list[tuple[float, float]], pd.DataFrame]:
+) -> tuple[FilledRegistries, list[int], bh.Histogram, list[tuple[float, float]], list[list[tuple[float, float]]], pd.DataFrame]:
     """
     Fill real + random registries for all valid runs in *df_runs*.
 
@@ -192,8 +199,8 @@ def _fill_run_type(
         Unweighted ctime distribution (PID-masked, all runs summed).
     list[tuple[float, float]]
         Per-run ``(ctmean, real_half_win)`` in ns for valid runs.
-    list[tuple[float, float]]
-        Per-run ``(random_center, random_half_win)`` in ns for valid runs.
+    list[list[tuple[float, float]]]
+        Per-run list of ``(center, half_win)`` for each discrete random peak.
     pd.DataFrame
         Per-run normyield table with columns: run, n_real, n_random,
         normyield_workflow, normyield_csv, residual_pct, flagged.
@@ -204,16 +211,15 @@ def _fill_run_type(
     real_reg   = build_histogram_registry(cfg.histograms)
     random_reg = build_histogram_registry(cfg.histograms)
     ctime_hist = bh.Histogram(_CTIME_AXIS, storage=bh.storage.Double())
-    run_windows:        list[tuple[float, float]] = []
-    run_random_windows: list[tuple[float, float]] = []
+    run_windows:        list[tuple[float, float]]       = []
+    run_random_windows: list[list[tuple[float, float]]] = []
     file_skips:         list[int] = []
     run_normyields:     list[dict] = []
 
-    # Random sideband half-window: constant per run period.
-    # random_half_win = wscale × (beam_bunch_ns / 2)
-    # win_scale is per-run: real_half_win / random_half_win
-    random_half_win = cfg.cuts.ctime_random_wscale * (cfg.beam_bunch_ns(config_dir) / 2.0)
-    logger.debug("[%s] random_half_win = %.3f ns", label, random_half_win)
+    # win_scale is constant: 1 / n_random_peaks (area-ratio normalisation).
+    n_rand_peaks = cfg.cuts.ctime_random_n_peaks_lo + cfg.cuts.ctime_random_n_peaks_hi
+    win_scale    = 1.0 / n_rand_peaks
+    logger.debug("[%s] n_rand_peaks=%d  win_scale=%.6f", label, n_rand_peaks, win_scale)
 
     for run_no, rw in wt_result.weights.items():
         row = df_runs.set_index("run").loc[run_no]
@@ -234,17 +240,15 @@ def _fill_run_type(
             ctmean  = row.get("ctmean",  None)
             ctsigma = row.get("ctsigma", None)
 
-        # Real half-window varies per run (auto mode); random_half_win is constant.
-        # win_scale = real_half_win / random_half_win (per-run ratio of window widths).
-        half_win  = _real_half_win(row, cfg)
-        win_scale = half_win / random_half_win
+        # Real half-window varies per run (auto mode).
+        # win_scale = 1 / n_rand_peaks is constant (computed before loop).
+        half_win = _real_half_win(row, cfg)
 
         real_mask   = build_real_mask(arrays, cfg.cuts, ctmean, ctsigma)
-        random_mask = build_random_mask(arrays, cfg.cuts, float(ctmean), random_half_win)
+        random_mask = build_random_mask(arrays, cfg.cuts, float(ctmean), half_win, beam_bunch)
 
-        # Absorb the per-run window-width scale into the random fill weight.
-        # win_scale = real_half_win / random_half_win — normalizes random counts
-        # to the real window width so they subtract correctly.
+        # Absorb win_scale into the random fill weight so that
+        # ``real − random`` is a valid subtraction without an extra factor.
         # Fill with eff_scale (charge-independent); histograms divided by Q_tot after loop.
         random_weight = rw.eff_scale * win_scale
 
@@ -261,8 +265,15 @@ def _fill_run_type(
                        if cfg.cuts.ctime_real_center != "auto"
                        else np.nan)
         run_windows.append((real_center, half_win))
-        random_center = real_center - cfg.cuts.ctime_random_offset
-        run_random_windows.append((random_center, random_half_win))
+
+        # Record discrete random-peak window parameters for this run
+        run_peaks: list[tuple[float, float]] = []
+        n_skip = cfg.cuts.ctime_random_n_skip
+        for k in range(1, cfg.cuts.ctime_random_n_peaks_lo + 1):
+            run_peaks.append((real_center - (n_skip + k) * beam_bunch, half_win))
+        for k in range(1, cfg.cuts.ctime_random_n_peaks_hi + 1):
+            run_peaks.append((real_center + (n_skip + k) * beam_bunch, half_win))
+        run_random_windows.append(run_peaks)
 
         # Per-run normyield from this workflow's own event selection.
         # Equivalent to the integral of the unweighted random-subtracted histogram
@@ -542,18 +553,22 @@ def run_pipeline(
             cfg.target, cfg.run_period, ratio, dummy_scale,
         )
 
+    # ---- beam bunch spacing ----
+    beam_bunch = cfg.beam_bunch_ns(config_dir)
+    logger.info("Beam bunch spacing: %.3f ns", beam_bunch)
+
     # ---- fill ----
-    ctime_hists:              dict[str, bh.Histogram]              = {}
-    ctime_run_windows:        dict[str, list[tuple[float, float]]] = {}
-    ctime_random_run_windows: dict[str, list[tuple[float, float]]] = {}
-    run_dfs:                  dict[str, pd.DataFrame]              = {}
-    normyield_per_run:        dict[str, pd.DataFrame]              = {}
+    ctime_hists:              dict[str, bh.Histogram]                    = {}
+    ctime_run_windows:        dict[str, list[tuple[float, float]]]       = {}
+    ctime_random_run_windows: dict[str, list[list[tuple[float, float]]]] = {}
+    run_dfs:                  dict[str, pd.DataFrame]                    = {}
+    normyield_per_run:        dict[str, pd.DataFrame]                    = {}
 
     (signal_regs, signal_skips,
      ctime_hists["signal"], ctime_run_windows["signal"],
      ctime_random_run_windows["signal"],
      normyield_per_run["signal"]) = (
-        _fill_run_type(df_signal, weight_tables["signal"], cfg, "signal", config_dir)
+        _fill_run_type(df_signal, weight_tables["signal"], cfg, "signal", beam_bunch, config_dir)
     )
     run_dfs["signal"] = df_signal
     file_skips["signal"] = signal_skips
@@ -600,7 +615,7 @@ def run_pipeline(
          ctime_random_run_windows["eplus"],
          normyield_per_run["eplus"]) = (
             _fill_run_type(df_eplus, weight_tables["eplus"], cfg, "eplus",
-                           config_dir, ctime_override=signal_ctime_override)
+                           beam_bunch, config_dir, ctime_override=signal_ctime_override)
         )
         run_dfs["eplus"] = df_eplus
         file_skips["eplus"] = eplus_skips
@@ -612,7 +627,7 @@ def run_pipeline(
          ctime_random_run_windows["dummy"],
          normyield_per_run["dummy"]) = (
             _fill_run_type(df_dummy, weight_tables["dummy"], cfg, "dummy",
-                           config_dir, ctime_override=signal_ctime_override)
+                           beam_bunch, config_dir, ctime_override=signal_ctime_override)
         )
         run_dfs["dummy"] = df_dummy
         file_skips["dummy"] = dummy_skips
@@ -625,6 +640,7 @@ def run_pipeline(
         ctime_hists=ctime_hists,
         ctime_run_windows=ctime_run_windows,
         ctime_random_run_windows=ctime_random_run_windows,
+        beam_bunch_ns=beam_bunch,
         weight_tables=weight_tables,
         file_skips=file_skips,
         run_dfs=run_dfs,
