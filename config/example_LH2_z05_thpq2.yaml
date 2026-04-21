@@ -49,15 +49,16 @@ cuts:
   psdelta_hi:    20.0    # %
   paero_npe_min:  2.0
   phgc_npe_min:   1.0
+  psshsum_max:    0.8
 
   # Coincidence time — real peak
   ctime_real_center:          auto
   ctime_real_nsigma:          3.0
   ctime_real_window_fallback: 2.0
 
-  # Coincidence time — random sideband
-  ctime_random_center:  39.2
-  ctime_random_window:  6.0
+  # Coincidence time — random sideband (relative to real peak, per run)
+  ctime_random_offset: 18.0
+  ctime_random_wscale:  6.0
 
 # ---- Histograms ----
 histograms:

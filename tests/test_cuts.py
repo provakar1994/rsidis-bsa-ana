@@ -17,7 +17,8 @@ from rsidis_ssa.cuts import (
     BRANCH_HCER_NPE,
     BRANCH_HELICITY,
     BRANCH_HSDELTA,
-    BRANCH_HSSHSUM,
+    BRANCH_HETOTTRACKNORM,
+    BRANCH_PETOTTRACKNORM,
     BRANCH_NU,
     BRANCH_PAERO_NPE,
     BRANCH_PHGC_NPE,
@@ -52,11 +53,12 @@ def cuts_cfg() -> CutsConfig:
         psdelta_hi=20.0,
         paero_npe_min=2.0,
         phgc_npe_min=1.0,
+        psshsum_max=0.8,
         ctime_real_center="auto",
         ctime_real_nsigma=3.0,
         ctime_real_window_fallback=2.0,
-        ctime_random_center=39.2,
-        ctime_random_window=6.0,
+        ctime_random_offset=20.0,
+        ctime_random_wscale=6.0,
     )
 
 
@@ -68,6 +70,7 @@ def _make_arrays(
     psdelta: float = 5.0,
     paero_npe: float = 3.0,
     phgc_npe: float = 2.0,
+    psshsum: float = 0.3,   # SHMS cal E/p — below psshsum_max=0.8 by default
     ctime: float = 51.2,
     hel: float = 1.0,
     p_pi: float = 3.0,
@@ -79,17 +82,18 @@ def _make_arrays(
     Override individual branches via keyword arguments.
     """
     return {
-        BRANCH_HSDELTA:   np.full(n, hsdelta),
-        BRANCH_HCER_NPE:  np.full(n, hcer_npe),
-        BRANCH_HSSHSUM:   np.full(n, hsshsum),
-        BRANCH_PSDELTA:   np.full(n, psdelta),
-        BRANCH_PAERO_NPE: np.full(n, paero_npe),
-        BRANCH_PHGC_NPE:  np.full(n, phgc_npe),
-        BRANCH_CTIME:     np.full(n, ctime),
-        BRANCH_HELICITY:  np.full(n, hel),
-        BRANCH_PPi:       np.full(n, p_pi),
-        BRANCH_NU:        np.full(n, nu),
-        BRANCH_THETA_PQ:  np.full(n, theta_pq),
+        BRANCH_HSDELTA:          np.full(n, hsdelta),
+        BRANCH_HCER_NPE:         np.full(n, hcer_npe),
+        BRANCH_HETOTTRACKNORM:   np.full(n, hsshsum),
+        BRANCH_PSDELTA:          np.full(n, psdelta),
+        BRANCH_PAERO_NPE:        np.full(n, paero_npe),
+        BRANCH_PHGC_NPE:         np.full(n, phgc_npe),
+        BRANCH_PETOTTRACKNORM:   np.full(n, psshsum),
+        BRANCH_CTIME:            np.full(n, ctime),
+        BRANCH_HELICITY:         np.full(n, hel),
+        BRANCH_PPi:              np.full(n, p_pi),
+        BRANCH_NU:               np.full(n, nu),
+        BRANCH_THETA_PQ:         np.full(n, theta_pq),
     }
 
 
@@ -263,11 +267,12 @@ class TestRealCtimeMask:
             psdelta_hi=20.0,
             paero_npe_min=2.0,
             phgc_npe_min=1.0,
+            psshsum_max=0.8,
             ctime_real_center=51.2,
             ctime_real_nsigma=3.0,
             ctime_real_window_fallback=2.0,
-            ctime_random_center=39.2,
-            ctime_random_window=6.0,
+            ctime_random_offset=20.0,
+            ctime_random_wscale=6.0,
         )
         arrays = _make_arrays(ctime=51.2)
         mask = real_ctime_mask(arrays, cfg, ctmean=None, ctsigma=None)
@@ -283,11 +288,12 @@ class TestRealCtimeMask:
             psdelta_hi=20.0,
             paero_npe_min=2.0,
             phgc_npe_min=1.0,
+            psshsum_max=0.8,
             ctime_real_center=51.2,
             ctime_real_nsigma=3.0,
             ctime_real_window_fallback=2.0,
-            ctime_random_center=39.2,
-            ctime_random_window=6.0,
+            ctime_random_offset=20.0,
+            ctime_random_wscale=6.0,
         )
         arrays = _make_arrays(ctime=54.0)  # |54.0 − 51.2| = 2.8 > 2.0 → fail
         mask = real_ctime_mask(arrays, cfg, ctmean=None, ctsigma=None)
@@ -299,26 +305,29 @@ class TestRealCtimeMask:
 # ===========================================================================
 
 class TestRandomCtimeMask:
+    # offset=20.0, ctmean=51.2 → random_center=31.2
+    # wscale=6.0, beam_bunch_ns=4.0 → random_half_win = 6.0×2.0 = 12.0 ns
+    # sideband: |ctime - 31.2| <= 12.0  →  [19.2, 43.2]
+    _RHW = 12.0   # random_half_win for these tests
 
     def test_within_sideband_passes(self, cuts_cfg):
-        # center=39.2, window=6.0 → [33.2, 45.2]
-        arrays = _make_arrays(ctime=39.2)
-        mask = random_ctime_mask(arrays, cuts_cfg)
+        arrays = _make_arrays(ctime=31.2)   # at random center
+        mask = random_ctime_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
         assert mask.all()
 
     def test_outside_sideband_fails(self, cuts_cfg):
-        arrays = _make_arrays(ctime=50.0)  # far from 39.2
-        mask = random_ctime_mask(arrays, cuts_cfg)
+        arrays = _make_arrays(ctime=51.2)   # real peak → outside sideband
+        mask = random_ctime_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
         assert not mask.any()
 
     def test_at_sideband_edge_passes(self, cuts_cfg):
-        arrays = _make_arrays(ctime=39.2 + 6.0)  # exactly at edge (<=)
-        mask = random_ctime_mask(arrays, cuts_cfg)
+        arrays = _make_arrays(ctime=31.2 + 12.0)   # exactly at upper edge (<=)
+        mask = random_ctime_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
         assert mask.all()
 
     def test_just_outside_sideband_fails(self, cuts_cfg):
-        arrays = _make_arrays(ctime=39.2 + 6.001)
-        mask = random_ctime_mask(arrays, cuts_cfg)
+        arrays = _make_arrays(ctime=31.2 + 12.001)  # just beyond upper edge
+        mask = random_ctime_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
         assert not mask.any()
 
 
@@ -353,15 +362,18 @@ class TestBuildRealMask:
 
 
 class TestBuildRandomMask:
+    # wscale=6.0, beam_bunch_ns=4.0 → random_half_win = 6.0×2.0 = 12.0 ns
+    # ctmean=51.2, offset=20.0 → random_center=31.2 → sideband [19.2, 43.2]
+    _RHW = 12.0
 
     def test_all_pass(self, cuts_cfg):
-        arrays = _make_arrays(ctime=39.2)
-        mask = build_random_mask(arrays, cuts_cfg)
+        arrays = _make_arrays(ctime=31.2)   # at random center → inside
+        mask = build_random_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
         assert mask.all()
 
     def test_real_ctime_not_in_sideband(self, cuts_cfg):
-        arrays = _make_arrays(ctime=51.2)  # real peak → outside sideband
-        mask = build_random_mask(arrays, cuts_cfg)
+        arrays = _make_arrays(ctime=51.2)   # real peak → outside sideband
+        mask = build_random_mask(arrays, cuts_cfg, ctmean=51.2, random_half_win=self._RHW)
         assert not mask.any()
 
 

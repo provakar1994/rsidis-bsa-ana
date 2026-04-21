@@ -49,6 +49,7 @@ MINIMAL_VALID = textwrap.dedent("""\
       run_type: PI-SIDIS
 
     target: C
+    run_period: period_1
     do_eplus_subtraction: true
     do_dummy_subtraction: false
 
@@ -69,11 +70,12 @@ MINIMAL_VALID = textwrap.dedent("""\
       psdelta_hi:    20.0
       paero_npe_min:  2.0
       phgc_npe_min:   1.0
+      psshsum_max:    0.8
       ctime_real_center:          auto
       ctime_real_nsigma:          3.0
       ctime_real_window_fallback: 2.0
-      ctime_random_center:        39.2
-      ctime_random_window:        6.0
+      ctime_random_offset:        20.0
+      ctime_random_wscale:         6.0
 
     histograms:
       - name:   hsdelta
@@ -314,8 +316,8 @@ class TestCutsConfig:
 
     def test_unknown_cut_key_raises(self, tmp_path):
         bad = MINIMAL_VALID.replace(
-            "ctime_random_window:        6.0",
-            "ctime_random_window:        6.0\n  mystery_cut: 99",
+            "ctime_random_wscale:         6.0",
+            "ctime_random_wscale:         6.0\n  mystery_cut: 99",
         )
         p = _write_yaml(tmp_path, bad)
         with pytest.raises(ValueError, match="mystery_cut"):

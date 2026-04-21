@@ -73,8 +73,10 @@ class TestGetPrescaleFactor:
     def test_ps5_active_fallback(self):
         assert get_prescale_factor(_make_row(ps6=float("nan"), ps5=1.0)) == 1.0
 
-    def test_ps6_takes_precedence_when_both_set(self):
-        assert get_prescale_factor(_make_row(ps6=2.0, ps5=4.0)) == 2.0
+    def test_both_active_raises(self):
+        """Both ps5 and ps6 positive is ambiguous — must raise."""
+        with pytest.raises(NormalizationError, match="both prescale slots are active"):
+            get_prescale_factor(_make_row(ps6=2.0, ps5=4.0))
 
     def test_neither_active_raises(self):
         with pytest.raises(NormalizationError, match="no active prescale"):
@@ -507,4 +509,155 @@ class TestCheckNormyieldConsistency:
         out = check_normyield_consistency(weights_C, df)
         assert (out["residual_pct"].abs() < 2.0).all(), (
             f"Residuals > 2%:\n{out[out['residual_pct'].abs() >= 2.0].to_string()}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# eff_scale and Q_tot — unit tests
+# ---------------------------------------------------------------------------
+
+class TestEffScaleAndQTot:
+
+    def test_eff_scale_formula(self):
+        """eff_scale = ps * boil / (h * p * lt) — no charge dependence."""
+        rw = compute_run_weight(_make_row(BCM2_Q=50.0, h_esing_Eff=0.9998,
+                                          p_hadron_Eff=0.930, ps6=1.0, comp_livetime=1.0))
+        expected_eff = 1.0 * 1.0 / (0.9998 * 0.930 * 1.0)   # ps=1, boil=1
+        assert math.isclose(rw.eff_scale, expected_eff, rel_tol=1e-9)
+
+    def test_eff_scale_times_charge_equals_inverse_weight(self):
+        """weight = eff_scale / charge  →  eff_scale = weight × charge."""
+        rw = compute_run_weight(_make_row(BCM2_Q=40.0, h_esing_Eff=0.9995,
+                                          p_hadron_Eff=0.92, comp_livetime=0.98))
+        assert math.isclose(rw.eff_scale, rw.weight * rw.charge, rel_tol=1e-9)
+
+    def test_eff_scale_independent_of_charge(self):
+        """Changing only charge must not affect eff_scale."""
+        rw1 = compute_run_weight(_make_row(BCM2_Q=30.0))
+        rw2 = compute_run_weight(_make_row(BCM2_Q=80.0))
+        assert math.isclose(rw1.eff_scale, rw2.eff_scale, rel_tol=1e-9)
+
+    def test_eff_scale_with_boil_corr(self):
+        """boil_corr > 1 must increase eff_scale proportionally."""
+        boil = 1.025
+        rw = compute_run_weight(_make_row(BCM2_Q=50.0, h_esing_Eff=0.9998,
+                                           p_hadron_Eff=0.930, ps6=1.0,
+                                           comp_livetime=1.0, boil_corr=boil),
+                                apply_boil_corr=True)
+        expected_eff = boil / (0.9998 * 0.930 * 1.0)
+        assert math.isclose(rw.eff_scale, expected_eff, rel_tol=1e-9)
+
+    def test_eff_scale_with_prescale(self):
+        """ps_factor > 1 must increase eff_scale proportionally."""
+        rw1 = compute_run_weight(_make_row(ps6=1.0))
+        rw2 = compute_run_weight(_make_row(ps6=3.0))
+        assert math.isclose(rw2.eff_scale, 3.0 * rw1.eff_scale, rel_tol=1e-9)
+
+    def test_Q_tot_sum_of_charges(self):
+        rows = pd.DataFrame([_make_row(run=1, BCM2_Q=30.0),
+                              _make_row(run=2, BCM2_Q=50.0)])
+        result = build_weight_table(rows)
+        assert math.isclose(result.Q_tot, 80.0, rel_tol=1e-9)
+
+    def test_Q_tot_excludes_bad_runs(self):
+        """A run excluded for bad charge must not contribute to Q_tot."""
+        rows = pd.DataFrame([_make_row(run=1, BCM2_Q=0.0),   # excluded
+                              _make_row(run=2, BCM2_Q=50.0)])
+        result = build_weight_table(rows)
+        assert result.n_excluded == 1
+        assert math.isclose(result.Q_tot, 50.0, rel_tol=1e-9)
+
+    def test_Q_tot_zero_when_all_excluded(self):
+        rows = pd.DataFrame([_make_row(run=1, BCM2_Q=0.0)])
+        result = build_weight_table(rows)
+        assert result.Q_tot == 0.0
+
+    def test_weight_table_to_df_has_eff_scale_column(self):
+        rows = pd.DataFrame([_make_row(run=1, BCM2_Q=50.0)])
+        result = build_weight_table(rows)
+        df = weight_table_to_df(result.weights)
+        assert "eff_scale" in df.columns
+
+    def test_summary_contains_Q_tot(self):
+        rows = pd.DataFrame([_make_row(run=1, BCM2_Q=50.0)])
+        result = build_weight_table(rows)
+        assert "Q_tot" in result.summary()
+
+
+# ---------------------------------------------------------------------------
+# Multi-run variance — boost_histogram correctness
+# ---------------------------------------------------------------------------
+
+class TestMultiRunVariance:
+
+    def test_bh_variance_matches_analytical(self):
+        """
+        Fill two synthetic runs into one histogram using eff_scale_i weights,
+        then multiply by 1/Q_tot.  The resulting bin value and variance must
+        match the analytical formulae:
+
+            Y_j      = sum_i  N_i * eff_scale_i   / Q_tot
+            Var(Y_j) = sum_i  N_i * eff_scale_i^2 / Q_tot^2
+        """
+        import boost_histogram as bh
+
+        eff1, eff2 = 1.1, 0.9          # eff_scale per run
+        Q1,   Q2   = 30.0, 50.0        # BCM2_Q [mC]
+        N1,   N2   = 100, 150          # events in the single bin
+        Q_tot      = Q1 + Q2
+
+        h = bh.Histogram(bh.axis.Regular(1, 0.0, 1.0), storage=bh.storage.Weight())
+        h.fill(np.zeros(N1), weight=eff1)
+        h.fill(np.zeros(N2), weight=eff2)
+        h *= (1.0 / Q_tot)
+
+        expected_value    = (N1 * eff1 + N2 * eff2) / Q_tot
+        expected_variance = (N1 * eff1**2 + N2 * eff2**2) / Q_tot**2
+
+        assert math.isclose(h.values()[0],    expected_value,    rel_tol=1e-9)
+        assert math.isclose(h.variances()[0], expected_variance, rel_tol=1e-9)
+
+    def test_single_run_variance_matches_analytical(self):
+        """Single run: variance = N * eff_scale^2 / Q_tot^2."""
+        import boost_histogram as bh
+
+        eff   = 1.05
+        Q_tot = 60.0
+        N     = 200
+
+        h = bh.Histogram(bh.axis.Regular(1, 0.0, 1.0), storage=bh.storage.Weight())
+        h.fill(np.zeros(N), weight=eff)
+        h *= (1.0 / Q_tot)
+
+        assert math.isclose(h.values()[0],    N * eff   / Q_tot,    rel_tol=1e-9)
+        assert math.isclose(h.variances()[0], N * eff**2 / Q_tot**2, rel_tol=1e-9)
+
+    def test_old_per_run_weight_gives_different_result(self):
+        """
+        Confirm the old approach (fill with w_r = eff_scale / Q_r) gives a
+        different combined value than the correct approach when charges differ.
+        This is the discrepancy the fix corrects.
+        """
+        import boost_histogram as bh
+
+        eff1, eff2 = 1.0, 1.0          # same efficiency for clarity
+        Q1,   Q2   = 30.0, 70.0        # deliberately unequal charges
+        N1,   N2   = 100, 100
+        Q_tot      = Q1 + Q2
+
+        # Correct approach
+        h_correct = bh.Histogram(bh.axis.Regular(1, 0.0, 1.0), storage=bh.storage.Weight())
+        h_correct.fill(np.zeros(N1), weight=eff1)
+        h_correct.fill(np.zeros(N2), weight=eff2)
+        h_correct *= (1.0 / Q_tot)
+
+        # Old (wrong) approach: fill with eff_scale / Q_r per run
+        h_old = bh.Histogram(bh.axis.Regular(1, 0.0, 1.0), storage=bh.storage.Weight())
+        h_old.fill(np.zeros(N1), weight=eff1 / Q1)
+        h_old.fill(np.zeros(N2), weight=eff2 / Q2)
+
+        # Both runs have the same N and eff, but different Q — old approach gives
+        # a different result because it weights each run by 1/Q_r instead of 1/Q_tot
+        assert not math.isclose(h_correct.values()[0], h_old.values()[0], rel_tol=1e-6), (
+            "Old and new approaches should differ when run charges are unequal"
         )

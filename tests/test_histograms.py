@@ -18,7 +18,8 @@ from rsidis_ssa.cuts import (
     BRANCH_HCER_NPE,
     BRANCH_HELICITY,
     BRANCH_HSDELTA,
-    BRANCH_HSSHSUM,
+    BRANCH_HETOTTRACKNORM,
+    BRANCH_PETOTTRACKNORM,
     BRANCH_NU,
     BRANCH_PAERO_NPE,
     BRANCH_PHGC_NPE,
@@ -64,17 +65,18 @@ def _no_pass_mask(n: int = 10) -> np.ndarray:
 
 def _make_arrays(n: int = 10, **overrides) -> dict[str, np.ndarray]:
     base = {
-        BRANCH_HSDELTA:   np.linspace(-4.0, 4.0, n),
-        BRANCH_HCER_NPE:  np.full(n, 2.0),
-        BRANCH_HSSHSUM:   np.full(n, 0.9),
-        BRANCH_PSDELTA:   np.full(n, 5.0),
-        BRANCH_PAERO_NPE: np.full(n, 3.0),
-        BRANCH_PHGC_NPE:  np.full(n, 2.0),
-        BRANCH_CTIME:     np.full(n, 51.2),
-        BRANCH_HELICITY:  np.full(n, 1.0),
-        BRANCH_PPi:       np.full(n, 3.0),
-        BRANCH_NU:        np.full(n, 6.0),
-        BRANCH_THETA_PQ:  np.full(n, 0.1),
+        BRANCH_HSDELTA:        np.linspace(-4.0, 4.0, n),
+        BRANCH_HCER_NPE:       np.full(n, 2.0),
+        BRANCH_HETOTTRACKNORM: np.full(n, 0.9),
+        BRANCH_PSDELTA:        np.full(n, 5.0),
+        BRANCH_PAERO_NPE:      np.full(n, 3.0),
+        BRANCH_PHGC_NPE:       np.full(n, 2.0),
+        BRANCH_PETOTTRACKNORM: np.full(n, 0.3),
+        BRANCH_CTIME:          np.full(n, 51.2),
+        BRANCH_HELICITY:       np.full(n, 1.0),
+        BRANCH_PPi:            np.full(n, 3.0),
+        BRANCH_NU:             np.full(n, 6.0),
+        BRANCH_THETA_PQ:       np.full(n, 0.1),
     }
     base.update(overrides)
     return base

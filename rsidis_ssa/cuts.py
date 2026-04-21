@@ -45,11 +45,12 @@ from rsidis_ssa.config_loader import CutsConfig
 # HMS electron PID
 BRANCH_HSDELTA  = "H_gtr_dp"            # HMS focal-plane delta [%]
 BRANCH_HCER_NPE = "H_cer_npeSum"        # HMS Cherenkov NPE sum
-BRANCH_HSSHSUM  = "H_cal_etottracknorm" # HMS calorimeter E/p (track-normalized)
+BRANCH_HETOTTRACKNORM  = "H_cal_etottracknorm" # HMS calorimeter E/p (track-normalized)
 
 # SHMS pion PID
 BRANCH_PSDELTA   = "P_gtr_dp"           # SHMS focal-plane delta [%]
 BRANCH_PAERO_NPE = "P_aero_npeSum"      # SHMS aerogel Cherenkov NPE sum
+BRANCH_PETOTTRACKNORM  = "P_cal_etottracknorm" # SHMS calorimeter E/p (track-normalized)
 BRANCH_PHGC_NPE  = "P_hgcer_npeSum"     # SHMS heavy-gas Cherenkov NPE sum
 
 # Coincidence time
@@ -138,11 +139,12 @@ def pid_mask(arrays: dict[str, np.ndarray], cuts_cfg: CutsConfig) -> np.ndarray:
         (arrays[BRANCH_HSDELTA]   >= cuts_cfg.hsdelta_lo)
         & (arrays[BRANCH_HSDELTA]   <= cuts_cfg.hsdelta_hi)
         & (arrays[BRANCH_HCER_NPE]  >= cuts_cfg.hcer_npe_min)
-        & (arrays[BRANCH_HSSHSUM]   >= cuts_cfg.hsshsum_min)
+        & (arrays[BRANCH_HETOTTRACKNORM]   >= cuts_cfg.hsshsum_min)
         & (arrays[BRANCH_PSDELTA]   >= cuts_cfg.psdelta_lo)
         & (arrays[BRANCH_PSDELTA]   <= cuts_cfg.psdelta_hi)
         & (arrays[BRANCH_PAERO_NPE] >= cuts_cfg.paero_npe_min)
         & (arrays[BRANCH_PHGC_NPE]  >= cuts_cfg.phgc_npe_min)
+        & (arrays[BRANCH_PETOTTRACKNORM]   <= cuts_cfg.psshsum_max)
     )
 
 
@@ -180,12 +182,13 @@ def real_ctime_mask(
     -------
     np.ndarray of bool
     """
+    nsigma = cuts_cfg.ctime_real_nsigma
     if cuts_cfg.ctime_real_center == "auto":
         center = float(ctmean)  # type: ignore[arg-type]
-        if ctsigma is None or pd.isna(ctsigma):
+        if nsigma is None or ctsigma is None or pd.isna(ctsigma):
             half_win = cuts_cfg.ctime_real_window_fallback
         else:
-            half_win = cuts_cfg.ctime_real_nsigma * float(ctsigma)
+            half_win = nsigma * float(ctsigma)
     else:
         center   = float(cuts_cfg.ctime_real_center)
         half_win = cuts_cfg.ctime_real_window_fallback
@@ -196,23 +199,37 @@ def real_ctime_mask(
 def random_ctime_mask(
     arrays: dict[str, np.ndarray],
     cuts_cfg: CutsConfig,
+    ctmean: float,
+    random_half_win: float,
 ) -> np.ndarray:
     """
     Boolean mask for the random coincidence-time sideband.
 
-    Window: |ctime − ctime_random_center| ≤ ctime_random_window
+    The sideband center shifts per run; the half-window is a pre-computed
+    constant (caller's responsibility):
+
+        random_center   = ctmean − ctime_random_offset
+        random_half_win = ctime_random_wscale × (beam_bunch_ns / 2)   [caller]
+
+    Window: |ctime − random_center| ≤ random_half_win
 
     Parameters
     ----------
     arrays : dict
         Must contain BRANCH_CTIME.
     cuts_cfg : CutsConfig
+    ctmean : float
+        Per-run coincidence-time mean of the real peak [ns].
+    random_half_win : float
+        Half-width of the random sideband window [ns].
+        = ctime_random_wscale × (beam_bunch_ns / 2), constant per run period.
 
     Returns
     -------
     np.ndarray of bool
     """
-    return np.abs(arrays[BRANCH_CTIME] - cuts_cfg.ctime_random_center) <= cuts_cfg.ctime_random_window
+    random_center = ctmean - cuts_cfg.ctime_random_offset
+    return np.abs(arrays[BRANCH_CTIME] - random_center) <= random_half_win
 
 
 def build_real_mask(
@@ -228,9 +245,11 @@ def build_real_mask(
 def build_random_mask(
     arrays: dict[str, np.ndarray],
     cuts_cfg: CutsConfig,
+    ctmean: float,
+    random_half_win: float,
 ) -> np.ndarray:
     """Combined PID + random coincidence-time sideband mask."""
-    return pid_mask(arrays, cuts_cfg) & random_ctime_mask(arrays, cuts_cfg)
+    return pid_mask(arrays, cuts_cfg) & random_ctime_mask(arrays, cuts_cfg, ctmean, random_half_win)
 
 
 # ---------------------------------------------------------------------------

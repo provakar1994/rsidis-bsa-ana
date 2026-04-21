@@ -86,15 +86,25 @@ class RunWeight:
     """
     Per-event normalization weight for one run, with a breakdown of
     each factor so any anomaly can be traced back to its source.
+
+    For multi-run histogram filling use ``eff_scale`` (not ``weight``):
+      - fill each run's events with weight = eff_scale
+      - after all runs, multiply histograms by 1/Q_tot
+    This gives the correct combined yield and error propagation.
+
+    ``weight`` (= eff_scale / charge) is retained for single-run
+    cross-checks (e.g. normyield ≈ ransubcoin × weight).
     """
     run:          int
-    weight:       float   # apply this to histogram.fill(values, weight=weight)
+    weight:       float   # eff_scale / charge — single-run cross-check only
     charge:       float   # BCM2_Q [mC]
     h_esing_eff:  float   # HMS electron singles efficiency
     p_hadron_eff: float   # SHMS hadron tracking efficiency
     ps_factor:    float   # prescale factor (1.0 = unprescaled)
     livetime:     float   # comp_livetime (fraction 0–1)
     boil_corr:    float   # boiling correction (1.0 for non-cryo)
+    eff_scale:    float   # ps_factor * boil_corr / (h_esing_eff * p_hadron_eff * livetime)
+                          # charge-independent; use for multi-run filling
 
     @property
     def norm_factor(self) -> float:
@@ -123,9 +133,13 @@ class WeightTableResult:
         Per-event weight for every successfully validated run.
     excluded : list[RunExclusion]
         Every run that was dropped, with the column and reason.
+    Q_tot : float
+        Sum of BCM2_Q [mC] over all valid runs.
+        Used by the pipeline to divide histograms after filling with eff_scale.
     """
     weights:  dict[int, RunWeight]     = field(default_factory=dict)
     excluded: list[RunExclusion]       = field(default_factory=list)
+    Q_tot:    float                    = 0.0
 
     @property
     def n_valid(self) -> int:
@@ -139,6 +153,7 @@ class WeightTableResult:
         lines = [
             f"Runs accepted : {self.n_valid}",
             f"Runs excluded : {self.n_excluded}",
+            f"Q_tot         : {self.Q_tot:.3f} mC",
         ]
         if self.excluded:
             lines.append("")
@@ -160,17 +175,30 @@ def get_prescale_factor(row: pd.Series) -> float:
     ps6 takes precedence; ps5 is the fallback.  Exactly one must be
     positive; the other should be NaN (was -999, replaced by load_runlist).
 
-    Raises NormalizationError if neither slot is active.
+    Raises NormalizationError if neither slot is active or if both are active.
     """
     ps6 = row["ps6"]
     ps5 = row["ps5"]
+    run = int(row["run"])
 
-    if pd.notna(ps6) and ps6 > 0:
+    ps6_active = pd.notna(ps6) and ps6 > 0
+    ps5_active = pd.notna(ps5) and ps5 > 0
+
+    if ps6_active and ps5_active:
+        raise NormalizationError(
+            run=run,
+            column="ps5/ps6",
+            message=(
+                f"Run {run}: both prescale slots are active "
+                f"(ps5={ps5}, ps6={ps6}).  Expected exactly one positive value."
+            ),
+        )
+
+    if ps6_active:
         return float(ps6)
-    if pd.notna(ps5) and ps5 > 0:
+    if ps5_active:
         return float(ps5)
 
-    run = int(row["run"])
     raise NormalizationError(
         run=run,
         column="ps5/ps6",
@@ -249,11 +277,13 @@ def compute_run_weight(
     else:
         boil = 1.0
 
-    # ---- assemble weight ----
-    # w = ps_factor * boil / (charge × h_eff × p_eff × livetime)
+    # ---- assemble weight and eff_scale ----
+    # eff_scale = ps_factor * boil / (h_eff × p_eff × livetime)  — charge-independent
+    # weight    = eff_scale / charge                              — kept for single-run QA
     # boil is in the NUMERATOR: less-dense target → each event ∝ more cross-section.
-    norm_factor = charge * h_eff * p_eff * livetime / (ps_factor * boil)
-    weight = 1.0 / norm_factor
+    eff_scale   = ps_factor * boil / (h_eff * p_eff * livetime)
+    norm_factor = charge / eff_scale                               # charge × h × p × lt / (ps × boil)
+    weight      = 1.0 / norm_factor
 
     return RunWeight(
         run=run,
@@ -264,6 +294,7 @@ def compute_run_weight(
         ps_factor=ps_factor,
         livetime=livetime,
         boil_corr=boil,
+        eff_scale=eff_scale,
     )
 
 
@@ -310,6 +341,8 @@ def build_weight_table(
             result.excluded.append(excl)
             logger.warning("Excluded run %d (%s): %s", exc.run, exc.column, exc)
 
+    result.Q_tot = sum(rw.charge for rw in result.weights.values())
+
     if result.excluded:
         logger.warning(
             "%d run(s) excluded from weight table due to missing/invalid "
@@ -344,17 +377,19 @@ def _write_log(
         fh.write("=" * 72 + "\n\n")
 
         fh.write(f"Runs accepted : {result.n_valid}\n")
-        fh.write(f"Runs excluded : {result.n_excluded}\n\n")
+        fh.write(f"Runs excluded : {result.n_excluded}\n")
+        fh.write(f"Q_tot         : {result.Q_tot:.3f} mC\n\n")
 
         if result.n_valid:
             fh.write("--- Accepted runs ---\n")
-            fh.write(f"  {'run':>8}  {'weight':>14}  {'BCM2_Q':>10}  "
+            fh.write(f"  {'run':>8}  {'weight':>14}  {'eff_scale':>14}  {'BCM2_Q':>10}  "
                      f"{'h_eff':>8}  {'p_eff':>8}  {'livetime':>10}  "
                      f"{'boil_corr':>10}  {'ps':>4}\n")
-            fh.write("  " + "-" * 80 + "\n")
+            fh.write("  " + "-" * 95 + "\n")
             for rw in sorted(result.weights.values(), key=lambda r: r.run):
                 fh.write(
-                    f"  {rw.run:>8}  {rw.weight:>14.6e}  {rw.charge:>10.3f}  "
+                    f"  {rw.run:>8}  {rw.weight:>14.6e}  {rw.eff_scale:>14.6e}  "
+                    f"{rw.charge:>10.3f}  "
                     f"{rw.h_esing_eff:>8.5f}  {rw.p_hadron_eff:>8.5f}  "
                     f"{rw.livetime:>10.6f}  {rw.boil_corr:>10.6f}  "
                     f"{rw.ps_factor:>4.1f}\n"
@@ -389,6 +424,7 @@ def weight_table_to_df(weights: dict[int, RunWeight]) -> pd.DataFrame:
             "run":           rw.run,
             "weight":        rw.weight,
             "norm_factor":   rw.norm_factor,
+            "eff_scale":     rw.eff_scale,
             "BCM2_Q":        rw.charge,
             "h_esing_Eff":   rw.h_esing_eff,
             "p_hadron_Eff":  rw.p_hadron_eff,

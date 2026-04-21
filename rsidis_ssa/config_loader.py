@@ -136,9 +136,19 @@ class CutsConfig(BaseModel):
     *_min              — minimum value for PID variables
     ctime_real_center  — 'auto' uses the per-run ctmean from the CSV;
                          a float fixes the center for all runs.
-    ctime_real_nsigma  — half-width = nsigma × ctsigma  (auto mode only)
-    ctime_real_window_fallback — used when ctsigma is NaN  [ns half-width]
-    ctime_random_*     — sideband center and half-width [ns]
+    ctime_real_nsigma  — half-width = nsigma × ctsigma  (auto mode only).
+                         Set to null to always use ctime_real_window_fallback,
+                         even when a valid ctsigma is available in the CSV.
+    ctime_real_window_fallback — fixed half-width [ns] used when ctsigma is
+                         NaN/missing, or when ctime_real_nsigma is null.
+
+    Random sideband — defined relative to the real peak (per run):
+    ctime_random_offset — distance between the real-peak center and the
+                          center of the random sideband block [ns].
+                          random_center_r = ctmean_r − ctime_random_offset
+    ctime_random_wscale — ratio of random half-width to real half-width.
+                          random_half_win_r = real_half_win_r × ctime_random_wscale
+                          win_scale (used for normalisation) = 1 / ctime_random_wscale
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -153,15 +163,16 @@ class CutsConfig(BaseModel):
     psdelta_hi:    float
     paero_npe_min: float
     phgc_npe_min:  float
+    psshsum_max:   float   # SHMS calorimeter E/p upper cut (pion rejection)
 
     # Coincidence time — real peak
     ctime_real_center:          _CtimeCenter
-    ctime_real_nsigma:          float
+    ctime_real_nsigma:          Optional[float]   # null → always use ctime_real_window_fallback
     ctime_real_window_fallback: float
 
-    # Coincidence time — random sideband
-    ctime_random_center: float
-    ctime_random_window: float
+    # Coincidence time — random sideband (relative to real peak, per run)
+    ctime_random_offset: float   # distance from real-peak center to random-block center [ns]
+    ctime_random_wscale: float   # random half-width / real half-width  (win_scale = 1/wscale)
 
     @model_validator(mode="after")
     def hsdelta_lo_lt_hi(self) -> "CutsConfig":
@@ -181,13 +192,21 @@ class CutsConfig(BaseModel):
 
     @field_validator(
         "hcer_npe_min", "hsshsum_min", "paero_npe_min", "phgc_npe_min",
-        "ctime_real_nsigma", "ctime_real_window_fallback", "ctime_random_window",
+        "ctime_real_window_fallback",
+        "ctime_random_offset", "ctime_random_wscale",
         mode="after",
     )
     @classmethod
     def must_be_positive(cls, v: float) -> float:
         if v <= 0:
             raise ValueError(f"Value must be > 0, got {v}")
+        return v
+
+    @field_validator("ctime_real_nsigma", mode="after")
+    @classmethod
+    def nsigma_positive_if_set(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
+            raise ValueError(f"ctime_real_nsigma must be > 0 when set, got {v}")
         return v
 
     @property
@@ -356,6 +375,37 @@ class AnalysisConfig(BaseModel):
                 f"Available targets: {list(scales.keys())}"
             )
         return float(scales[self.target])
+
+    def beam_bunch_ns(self, config_dir: Optional[Path] = None) -> float:
+        """
+        Return the beam bunch spacing [ns] for this run period, loaded from
+        run_constants.yaml.
+
+        The random sideband half-window is:
+            random_half_win = ctime_random_wscale × (beam_bunch_ns / 2)
+
+        Raises FileNotFoundError if run_constants.yaml is not found.
+        Raises KeyError if the run_period or beam_bunch_ns key is missing.
+        """
+        constants_path = self.resolve_run_constants_path(config_dir)
+        if not constants_path.exists():
+            raise FileNotFoundError(
+                f"run_constants.yaml not found: {constants_path}\n"
+                f"Expected alongside the analysis config in {constants_path.parent}"
+            )
+        with constants_path.open() as fh:
+            data = yaml.safe_load(fh)
+        if self.run_period not in data:
+            raise KeyError(
+                f"run_period '{self.run_period}' not found in {constants_path}."
+            )
+        period = data[self.run_period]
+        if "beam_bunch_ns" not in period:
+            raise KeyError(
+                f"'beam_bunch_ns' not found in period '{self.run_period}' of "
+                f"{constants_path}. Add it as a top-level key under the period."
+            )
+        return float(period["beam_bunch_ns"])
 
     def histogram_names(self) -> list[str]:
         return [h.name for h in self.histograms]

@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -141,10 +142,12 @@ def _page_weights(pdf: PdfPages, result: PipelineResult) -> None:
 
 def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
     """
-    Two-panel coincidence-time diagnostic page.
+    Three-panel coincidence-time diagnostic page.
 
-    Left  — full range showing both the real peak and random sideband.
-    Right — zoom on the real peak with per-run window boundaries.
+    Left   — full range showing both the real peak and random sideband.
+    Centre — zoom on the real peak with per-run window boundaries.
+    Right  — ctmean vs run number (from CSV) for signal and dummy runs,
+             with ctsigma error bars and a weighted-mean constant fit.
     """
     cfg  = result.cfg
     cuts = cfg.cuts
@@ -154,13 +157,18 @@ def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
     sig_vals = h_sig.values()
 
     # Per-run window parameters for signal
-    windows = result.ctime_run_windows["signal"]
+    windows        = result.ctime_run_windows["signal"]
+    rand_windows   = result.ctime_random_run_windows["signal"]
     valid_ctmeans  = [c for (c, _) in windows if not np.isnan(c)]
     valid_halfwins = [h for (_, h) in windows]
-    mean_ctmean   = float(np.mean(valid_ctmeans))  if valid_ctmeans  else 0.0
-    mean_half_win = float(np.mean(valid_halfwins)) if valid_halfwins else cuts.ctime_real_window_fallback
+    mean_ctmean    = float(np.mean(valid_ctmeans))  if valid_ctmeans  else 0.0
+    mean_half_win  = float(np.mean(valid_halfwins)) if valid_halfwins else cuts.ctime_real_window_fallback
+    mean_rand_center  = float(np.mean([c for (c, _) in rand_windows if not np.isnan(c)])) \
+                        if rand_windows else mean_ctmean - cuts.ctime_random_offset
+    mean_rand_hw      = float(np.mean([h for (_, h) in rand_windows])) \
+                        if rand_windows else mean_half_win * cuts.ctime_random_wscale
 
-    fig, (ax_full, ax_zoom) = plt.subplots(1, 2, figsize=(12, 4.5))
+    fig, (ax_full, ax_zoom, ax_run) = plt.subplots(1, 3, figsize=(17, 4.5))
     fig.suptitle("Coincidence-time distribution", fontsize=11, fontweight="bold")
 
     # ---- helper: draw on one axis ----
@@ -181,13 +189,18 @@ def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
                     label=f"real: {mean_ctmean:.2f} ± {mean_half_win:.2f} ns")
     ax_full.axvline(mean_ctmean - mean_half_win, color="limegreen", lw=0.9, ls="--")
     ax_full.axvline(mean_ctmean + mean_half_win, color="limegreen", lw=0.9, ls="--")
-    # Random sideband shading
-    rand_lo = cuts.ctime_random_center - cuts.ctime_random_window
-    rand_hi = cuts.ctime_random_center + cuts.ctime_random_window
+    # Random sideband shading (mean over runs; per-run windows shown as thin lines)
+    rand_lo = mean_rand_center - mean_rand_hw
+    rand_hi = mean_rand_center + mean_rand_hw
     ax_full.axvspan(rand_lo, rand_hi, color="royalblue", alpha=0.15,
-                    label=f"random: {cuts.ctime_random_center:.2f} ± {cuts.ctime_random_window:.2f} ns")
+                    label=f"random: {mean_rand_center:.2f} ± {mean_rand_hw:.2f} ns")
     ax_full.axvline(rand_lo, color="royalblue", lw=0.9, ls="--")
     ax_full.axvline(rand_hi, color="royalblue", lw=0.9, ls="--")
+    for rc, rhw in rand_windows:
+        if np.isnan(rc):
+            continue
+        ax_full.axvline(rc - rhw, color="royalblue", lw=0.4, alpha=0.3)
+        ax_full.axvline(rc + rhw, color="royalblue", lw=0.4, alpha=0.3)
     ax_full.set_title("Full range")
     ax_full.legend(fontsize=7)
 
@@ -218,11 +231,238 @@ def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
     info = (f"center: {mode_str}\n"
             f"mean ctmean = {mean_ctmean:.3f} ns\n"
             f"mean half-win = {mean_half_win:.3f} ns\n"
+            f"random offset = {cuts.ctime_random_offset:.1f} ns\n"
+            f"random wscale = {cuts.ctime_random_wscale:.1f}  (win_scale = 1/{cuts.ctime_random_wscale:.0f})\n"
             f"N runs = {n_runs}")
     ax_zoom.text(0.02, 0.97, info, transform=ax_zoom.transAxes,
                  va="top", ha="left", fontsize=7, family="monospace",
                  bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
     ax_zoom.set_title("Zoom: real peak  (gray = per-run windows)")
+
+    # ---- right panel: ctmean vs run number (from CSV) ----
+    _plot_ctmean_vs_run(ax_run, result)
+
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+def _plot_ctmean_vs_run(ax, result: PipelineResult) -> None:
+    """
+    Plot ctmean ± ctsigma vs run number (from CSV) for signal and dummy runs.
+    Overlays a chi²-weighted constant fit (weighted mean ± error).
+
+    All run types share the same x-axis, ordered by run number globally so
+    signal and dummy points never land on the same tick.
+    """
+    series = [
+        ("signal", "o", "steelblue"),
+        ("dummy",  "s", "darkorange"),
+    ]
+
+    # ── Step 1: collect all valid run numbers across all active run types ──
+    run_data: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    all_runs: list[int] = []
+    for label, _, _ in series:
+        df = result.run_dfs.get(label)
+        if df is None or df.empty:
+            continue
+        runs = df["run"].values.astype(int)
+        ct   = pd.to_numeric(df["ctmean"],  errors="coerce").values
+        sig  = pd.to_numeric(df["ctsigma"], errors="coerce").values
+        ok   = np.isfinite(ct) & np.isfinite(sig) & (sig > 0)
+        if not ok.any():
+            continue
+        run_data[label] = (runs, ct, sig, ok)
+        all_runs.extend(runs.tolist())
+
+    if not all_runs:
+        ax.set_visible(False)
+        return
+
+    # Global sorted unique run list → x position map
+    sorted_runs = sorted(set(all_runs))
+    run_to_x    = {r: i for i, r in enumerate(sorted_runs)}
+
+    # ── Step 2: plot each run type ──
+    all_ctmeans:  list[np.ndarray] = []
+    all_ctsigmas: list[np.ndarray] = []
+
+    for label, marker, color in series:
+        if label not in run_data:
+            continue
+        runs, ct, sig, ok = run_data[label]
+        x_pos = np.array([run_to_x[r] for r in runs[ok]])
+        ax.errorbar(x_pos, ct[ok], yerr=sig[ok],
+                    fmt=marker, color=color, ms=5, lw=1.0, capsize=3,
+                    label=label, zorder=3)
+        all_ctmeans.append(ct[ok])
+        all_ctsigmas.append(sig[ok])
+
+    # ── Step 3: x-axis ticks — one tick per run, label = run number ──
+    x_all = np.arange(len(sorted_runs))
+    ax.set_xticks(x_all)
+    ax.set_xticklabels(sorted_runs, rotation=45, ha="right", fontsize=6)
+    ax.set_xlim(-0.5, len(sorted_runs) - 0.5)
+
+    # ── Step 4: weighted-mean fit (signal only, so dummy runs don't bias it) ──
+    if "signal" in run_data:
+        _, ct_s, sig_s, ok_s = run_data["signal"]
+        w       = 1.0 / sig_s[ok_s]**2
+        wmean   = float(np.sum(w * ct_s[ok_s]) / np.sum(w))
+        wmean_err = float(1.0 / np.sqrt(np.sum(w)))
+
+        ax.axhline(wmean, color="black", lw=1.2, ls="--",
+                   label=f"sig wtd mean = {wmean:.3f} ± {wmean_err:.3f} ns")
+        ax.axhspan(wmean - wmean_err, wmean + wmean_err,
+                   color="black", alpha=0.10)
+
+        n_sig = int(ok_s.sum())
+        info  = (f"wtd mean = {wmean:.3f} ns\n"
+                 f"± {wmean_err:.3f} ns\n"
+                 f"N(sig) = {n_sig}")
+        ax.text(0.98, 0.97, info, transform=ax.transAxes,
+                va="top", ha="right", fontsize=7, family="monospace",
+                bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
+
+    ax.set_xlabel("run number")
+    ax.set_ylabel("ctmean (ns)")
+    ax.set_title("ctmean vs run  (CSV values)")
+    ax.legend(fontsize=7)
+
+
+# ---------------------------------------------------------------------------
+# Page 3: normalized yield vs run number
+# ---------------------------------------------------------------------------
+
+def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
+    """
+    Two-row diagnostic page per active run type.
+
+    Row 1 — normalized yield: workflow vs CSV normyield per run.
+    Row 2 — raw event counts: workflow (n_real, n_random, n_rsc)
+             vs CSV (coin, randoms, ransubcoin) per run.
+             This row isolates where the discrepancy originates.
+
+    Flagged runs (|residual| > 2%) are marked with a red × on row 1.
+    """
+    labels = [l for l in ("signal", "eplus", "dummy")
+              if l in result.normyield_per_run
+              and not result.normyield_per_run[l].empty]
+    if not labels:
+        return
+
+    n_cols = len(labels)
+    # 2 rows: top = normyield, bottom = raw counts
+    fig, all_axes = plt.subplots(2, n_cols,
+                                 figsize=(5.5 * n_cols, 8.5),
+                                 sharey=False)
+    # Ensure 2-D indexing even for a single column
+    if n_cols == 1:
+        all_axes = [[all_axes[0]], [all_axes[1]]]
+    top_axes, bot_axes = all_axes[0], all_axes[1]
+
+    fig.suptitle("Normalized yield vs run number", fontsize=11, fontweight="bold")
+
+    run_colors = {"signal": "steelblue", "eplus": "tomato", "dummy": "darkorange"}
+
+    for idx, label in enumerate(labels):
+        ny_df = result.normyield_per_run[label].sort_values("run")
+        wt    = result.weight_tables[label]
+        color = run_colors.get(label, "gray")
+
+        runs = ny_df["run"].values
+        x    = np.arange(len(runs))
+
+        # ── Row 1: normyield comparison ──────────────────────────────────────
+        ax = top_axes[idx]
+
+        ax.plot(x, ny_df["normyield_workflow"].values,
+                "o-", color=color, ms=4, lw=1.2,
+                label="workflow" if idx == 0 else "_nolegend_")
+
+        csv_vals = ny_df.get("normyield_csv", pd.Series(dtype=float)).values
+        if not np.all(np.isnan(csv_vals.astype(float))):
+            ax.plot(x, csv_vals,
+                    "s--", color="black", ms=4, lw=0.9, alpha=0.7,
+                    label="CSV normyield" if idx == 0 else "_nolegend_")
+
+        flagged_mask = ny_df["flagged"].fillna(False).values
+        if flagged_mask.any():
+            ax.scatter(x[flagged_mask], ny_df["normyield_workflow"].values[flagged_mask],
+                       marker="x", color="crimson", s=80, zorder=5, lw=2,
+                       label="flagged (>2%)" if idx == 0 else "_nolegend_")
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(runs, rotation=45, ha="right", fontsize=6)
+        ax.set_xlabel("run number")
+        ax.set_ylabel("normyield  (counts mC⁻¹)")
+        ax.set_title(f"{label}  ({wt.n_valid} runs,  Q_tot = {wt.Q_tot:.1f} mC)")
+
+        res = ny_df["residual_pct"].dropna()
+        if len(res) > 0:
+            n_flagged  = int(flagged_mask.sum())
+            median_res = float(res.median())
+            max_res    = float(res.abs().max())
+            info = (f"median Δ = {median_res:+.2f}%\n"
+                    f"max|Δ|   = {max_res:.2f}%\n"
+                    f"flagged  = {n_flagged}")
+            ax.text(0.98, 0.97, info, transform=ax.transAxes,
+                    va="top", ha="right", fontsize=7, family="monospace",
+                    bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
+
+        if idx == 0:
+            ax.legend(fontsize=7)
+
+        # ── Row 2: raw count comparison ──────────────────────────────────────
+        ax2 = bot_axes[idx]
+
+        has_csv_counts = all(c in ny_df.columns for c in
+                             ("csv_coin", "csv_randoms", "csv_ransubcoin"))
+
+        # Workflow counts
+        ax2.plot(x, ny_df["n_real"].values,
+                 "o-",  color=color, ms=4, lw=1.2,
+                 label="n_real (wf)" if idx == 0 else "_nolegend_")
+        ax2.plot(x, ny_df["n_rand_scaled"].values,
+                 "^--", color=color, ms=4, lw=1.0, alpha=0.6,
+                 label="n_rand×scale (wf)" if idx == 0 else "_nolegend_")
+        ax2.plot(x, ny_df["n_rsc"].values,
+                 "D-",  color=color, ms=4, lw=1.4,
+                 label="n_rsc (wf)" if idx == 0 else "_nolegend_")
+
+        if has_csv_counts:
+            ax2.plot(x, ny_df["csv_coin"].values,
+                     "o--",  color="black", ms=4, lw=1.2, alpha=0.7,
+                     label="coin (CSV)" if idx == 0 else "_nolegend_")
+            ax2.plot(x, ny_df["csv_randoms"].values,
+                     "^:",   color="black", ms=4, lw=1.0, alpha=0.5,
+                     label="randoms (CSV)" if idx == 0 else "_nolegend_")
+            ax2.plot(x, ny_df["csv_ransubcoin"].values,
+                     "D--",  color="black", ms=4, lw=1.4, alpha=0.7,
+                     label="ransubcoin (CSV)" if idx == 0 else "_nolegend_")
+
+            # Annotate the ratio n_real / coin for each run
+            coin_vals = ny_df["csv_coin"].values.astype(float)
+            nreal_vals = ny_df["n_real"].values.astype(float)
+            ok = (coin_vals != 0) & np.isfinite(coin_vals) & np.isfinite(nreal_vals)
+            if ok.any():
+                ratios = nreal_vals[ok] / coin_vals[ok]
+                med_r  = float(np.median(ratios))
+                ax2.text(0.02, 0.97,
+                         f"median n_real/coin = {med_r:.3f}",
+                         transform=ax2.transAxes, va="top", ha="left",
+                         fontsize=7, family="monospace",
+                         bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
+
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(runs, rotation=45, ha="right", fontsize=6)
+        ax2.set_xlabel("run number")
+        ax2.set_ylabel("event counts")
+        ax2.set_title(f"{label} — raw count comparison")
+
+        if idx == 0:
+            ax2.legend(fontsize=6)
 
     fig.tight_layout()
     pdf.savefig(fig)
@@ -230,7 +470,7 @@ def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pages 3+: per-histogram subtraction overview
+# Pages 4+: per-histogram subtraction overview
 # ---------------------------------------------------------------------------
 
 def _page_histogram(
@@ -434,6 +674,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
 
         _page_weights(pdf, result)
         _page_ctime(pdf, result)
+        _page_normyield(pdf, result)
 
         for hcfg in cfg.histograms:
             hname = hcfg.name
@@ -459,7 +700,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
         _page_statistics(pdf, result, sub_results)
 
     logger.info("Done → %s  (%d pages)", output_pdf,
-                len(cfg.histograms) + 3)
+                len(cfg.histograms) + 4)
 
 
 def main() -> None:

@@ -61,17 +61,21 @@ cuts:
   psdelta_hi:    20.0    # %
   paero_npe_min:  2.0
   phgc_npe_min:   1.0
+  psshsum_max:    0.8
 
   # Coincidence time — real peak
   # Use 'auto' to take ctmean from the runlist CSV for each run,
   # or supply a fixed value in ns.
   ctime_real_center:          auto    # use CSV ctmean per run
-  ctime_real_nsigma:          3.0     # ± n * ctsigma around the peak
+  ctime_real_nsigma:          null    # ± n * ctsigma around the peak or null ← use fallback window always
   ctime_real_window_fallback: 2.0     # ns half-width when ctsigma = NaN
 
-  # Coincidence time — random sideband
-  ctime_random_center:  39.2   # ns
-  ctime_random_window:  6.0    # ns half-width (full width = 12 ns)
+  # Coincidence time — random sideband (defined relative to the real peak, per run)
+  # random_center_r   = ctmean_r - ctime_random_offset
+  # random_half_win_r = real_half_win_r * ctime_random_wscale
+  # win_scale         = 1 / ctime_random_wscale
+  ctime_random_offset: 18.0   # distance from real-peak center to random-block center [ns]
+  ctime_random_wscale:  6.0   # random half-width / real half-width
 
 # ---- Histograms ----
 # Each entry defines one 1-D histogram.

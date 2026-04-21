@@ -19,7 +19,8 @@ from rsidis_ssa.cuts import (
     BRANCH_HCER_NPE,
     BRANCH_HELICITY,
     BRANCH_HSDELTA,
-    BRANCH_HSSHSUM,
+    BRANCH_HETOTTRACKNORM,
+    BRANCH_PETOTTRACKNORM,
     BRANCH_NU,
     BRANCH_PAERO_NPE,
     BRANCH_PHGC_NPE,
@@ -49,11 +50,12 @@ def cuts_cfg() -> CutsConfig:
         psdelta_hi=20.0,
         paero_npe_min=2.0,
         phgc_npe_min=1.0,
+        psshsum_max=0.8,
         ctime_real_center="auto",
         ctime_real_nsigma=3.0,
         ctime_real_window_fallback=2.0,
-        ctime_random_center=39.2,
-        ctime_random_window=6.0,
+        ctime_random_offset=20.0,
+        ctime_random_wscale=6.0,
     )
 
 
