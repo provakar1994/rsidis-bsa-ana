@@ -496,10 +496,16 @@ def _page_histogram(
     h_after_ep:   object | None,
     h_after_dum:  object | None,
     sub_results:  list[SubtractionResult],
+    dummy_scale:  float = 1.0,
 ) -> None:
     """One figure per histogram showing all subtraction steps."""
     has_ep  = h_ep_real is not None
     has_dum = h_dum_ran is not None
+    # Scale the dummy histogram to the fraction actually subtracted.
+    # h_dum_ran carries the full dummy yield; only dummy_scale × that is removed.
+    h_dum_scaled = (h_dum_ran * dummy_scale) if has_dum else None
+    dum_label = (f"dummy×{dummy_scale:.3f} − random"
+                 if abs(dummy_scale - 1.0) > 1e-6 else "dummy − random")
     n_cols  = 2 + int(has_ep) + int(has_dum)
     fig, axes = plt.subplots(1, n_cols, figsize=(4.5 * n_cols, 4.0), sharey=False)
     if n_cols == 1:
@@ -525,7 +531,7 @@ def _page_histogram(
         _plot_hist_step(ax, h_ep_real,   "e⁺ real",         "tomato", alpha=0.7)
         _plot_hist_step(ax, h_ep_random, "e⁺ random×scale", "tomato", alpha=0.4)
     elif has_dum:
-        _plot_hist_step(ax, h_dum_ran, "dummy − random", "darkorange", alpha=0.7)
+        _plot_hist_step(ax, h_dum_scaled, dum_label, "darkorange", alpha=0.7)
     ax.set_xlabel(xlabel)
     ax.set_title("After random subtraction")
     ax.legend(fontsize=7)
@@ -538,7 +544,7 @@ def _page_histogram(
         _plot_hist_step(ax, ep_sub_ran,  "e⁺ − random",     "tomato", alpha=0.7)
         _plot_hist_step(ax, h_after_ep,  "after e⁺ sub",    "black")
         if has_dum:
-            _plot_hist_step(ax, h_dum_ran, "dummy − random", "darkorange", alpha=0.6)
+            _plot_hist_step(ax, h_dum_scaled, dum_label, "darkorange", alpha=0.6)
         ax.set_xlabel(xlabel)
         ax.set_title("After e⁺ subtraction")
         ax.legend(fontsize=7)
@@ -547,8 +553,8 @@ def _page_histogram(
     if has_dum and h_after_dum is not None:
         ax = axes[col]; col += 1
         prev = h_after_ep if (has_ep and h_after_ep is not None) else h_after_ran
-        _plot_hist_step(ax, prev,        "before dummy sub", "black",      alpha=0.35)
-        _plot_hist_step(ax, h_dum_ran,   "dummy − random",   "darkorange", alpha=0.7)
+        _plot_hist_step(ax, prev,         "before dummy sub", "black",      alpha=0.35)
+        _plot_hist_step(ax, h_dum_scaled, dum_label,         "darkorange", alpha=0.7)
         _plot_hist_step(ax, h_after_dum, "final",            "black")
         ax.set_xlabel(xlabel)
         ax.set_title("After dummy subtraction")
@@ -705,6 +711,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
                 h_after_ep   = h_after_ep,
                 h_after_dum  = h_after_dum,
                 sub_results  = sub_results,
+                dummy_scale  = result.dummy_scale,
             )
 
         _page_statistics(pdf, result, sub_results)
