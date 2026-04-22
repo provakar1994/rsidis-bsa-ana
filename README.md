@@ -21,7 +21,8 @@ One YAML config file drives one complete analysis (one kinematic setting, one ta
    - [Step 8 — Background Subtraction](#step-8--background-subtraction)
 5. [Diagnostic PDF Pages](#diagnostic-pdf-pages)
 6. [Configuration Reference](#configuration-reference)
-7. [Branch Name Reference](#branch-name-reference)
+7. [Run Constants Reference](#run-constants-reference)
+8. [Branch Name Reference](#branch-name-reference)
 
 ---
 
@@ -32,9 +33,9 @@ python analysis.py config/example_C_z05_thpq2.yaml
 python analysis.py config/example_LH2_z05_thpq2.yaml
 ```
 
-Each command produces a multi-page PDF (`<config-stem>_diagnostics.pdf`) with weight
-distributions, coincidence-time cuts, per-histogram subtraction overlays, and a
-statistics table.
+Each command produces a multi-page PDF (`<config-stem>_diagnostics.pdf`) with
+coincidence-time cuts, per-run yield diagnostics, per-histogram subtraction overlays,
+and a statistics table.
 
 ---
 
@@ -46,7 +47,7 @@ ssa/
 ├── config/
 │   ├── example_C_z05_thpq2.yaml
 │   ├── example_LH2_z05_thpq2.yaml
-│   └── run_constants.yaml       # Run-period-specific constants (dummy scales, …)
+│   └── run_constants.yaml       # Run-period constants (dummy scales, beam_bunch_ns, …)
 ├── data/
 │   ├── rsidis_bigtable_pass0p1.csv   # Master runlist
 │   └── rootfiles_pass0p1/            # Symlinked or local ROOT skim files
@@ -215,12 +216,13 @@ in a run at once).
 **PID mask** (`cuts.pid_mask`) — HMS electron + SHMS pion identification:
 
 ```python
-(H_gtr_dp         >= hsdelta_lo)  &  (H_gtr_dp         <= hsdelta_hi)
-& (H_cer_npeSum   >= hcer_npe_min)
+(H_gtr_dp              >= hsdelta_lo)  &  (H_gtr_dp         <= hsdelta_hi)
+& (H_cer_npeSum        >= hcer_npe_min)
 & (H_cal_etottracknorm >= hsshsum_min)
-& (P_gtr_dp       >= psdelta_lo)  &  (P_gtr_dp         <= psdelta_hi)
-& (P_aero_npeSum  >= paero_npe_min)
-& (P_hgcer_npeSum >= phgc_npe_min)
+& (P_gtr_dp            >= psdelta_lo)  &  (P_gtr_dp         <= psdelta_hi)
+& (P_aero_npeSum       >= paero_npe_min)
+& (P_hgcer_npeSum      >= phgc_npe_min)
+& (P_cal_etottracknorm <= psshsum_max)
 ```
 
 **Real coincidence-time mask** (`cuts.build_real_mask`) — PID AND:
@@ -236,11 +238,23 @@ where `center` and `half_win` are determined per run:
 | `"auto"` | `ctmean` from runlist CSV | `ctime_real_nsigma × ctsigma` (or fallback if NaN) |
 | fixed float | that value | `ctime_real_window_fallback` |
 
-**Random sideband mask** (`cuts.build_random_mask`) — PID AND:
+**Random sideband mask** (`cuts.build_random_mask`) — PID AND union of discrete
+windows around individual beam-bunch peaks:
 
 ```
-|CTime_ePiCoinTime_ROC2 − ctime_random_center| ≤ ctime_random_window
+center_k = ctmean − (n_skip + k) × beam_bunch_ns   for k = 1 … n_peaks_lo   (lo side)
+center_k = ctmean + (n_skip + k) × beam_bunch_ns   for k = 1 … n_peaks_hi   (hi side)
+
+event passes if |ctime − center_k| ≤ real_half_win  for any k
 ```
+
+`n_skip ≥ 1` ensures the immediately adjacent beam-bunch peaks are always excluded.
+Each random window uses the same half-width as the real peak, so statistics per
+window are directly comparable.  Setting `n_peaks_lo = 0` or `n_peaks_hi = 0`
+produces a one-sided sideband; `lo + hi` must be ≥ 1.
+
+`beam_bunch_ns` (the beam bunch spacing in ns) is loaded once per run period from
+`run_constants.yaml`.
 
 **Effective helicity** (for helicity-split histograms):
 
@@ -270,8 +284,7 @@ histogram for one run:
    - `helicity_cut: negative`: `mask & (eff_hel < -0.5)`
 3. Resolve fill values:
    - Direct branch: `arrays[branch][final_mask]`
-   - `branch: z` or `branch: pt` — read directly from ROOT tree like any other branch
-   - `__computed__zhad`: `sqrt(P_gtr_p² + m_π²) / H_kin_primary_nu` (m_π = 0.13957018 GeV/c²)
+   - `__computed__zhad`: `sqrt(P_gtr_p² + m_π²) / H_kin_primary_nu`
    - `__computed__Pt`: `P_gtr_p × sin(P_kin_secondary_th_xq)`
 4. `registry[name].fill(values, weight=weight)`
 
@@ -289,18 +302,19 @@ Two parallel registries are filled per run type:
 | Registry | Mask | Weight per event |
 |----------|------|-----------------|
 | `real` | PID ∩ real ctime window | `w_r` |
-| `random` | PID ∩ random sideband | `w_r × win_scale` |
+| `random` | PID ∩ union of random-peak windows | `w_r × win_scale` |
 
-**`win_scale`** absorbs the difference in window widths so that a simple subtraction
-`h_real − h_random` is already correctly normalised:
+**`win_scale`** normalises the random sum to one real-window equivalent:
 
 ```
-win_scale = real_half_win / random_half_win
+win_scale = 1 / (n_peaks_lo + n_peaks_hi)
 ```
 
-For example, with a 3σ real window (~1.1 ns half-width) and a ±6 ns random window:
-`win_scale ≈ 1.1 / 6.0 ≈ 0.183`.  The random histogram is therefore scaled down to
-represent the same exposure as the real window before subtraction.
+This is a constant (independent of run or window width), because every random window
+has the same half-width as the real peak.  The simple subtraction `h_real − h_random`
+is then already correctly normalised without any additional scale factor.
+
+For example, with 3 lo + 3 hi random peaks: `win_scale = 1/6 ≈ 0.167`.
 
 ---
 
@@ -336,26 +350,20 @@ per unit charge by their weight tables.
 #### 8c — Dummy-target subtraction (LH2/LD2 only)
 
 ```
-scale        = 1 / (dummy_thickness / cryo_wall_thickness)
+dummy_scale   = 1 / (dummy_thickness / cryo_wall_thickness)
 h_dum_sub_ran = subtract_randoms(h_dum_real, h_dum_random, scale=1.0)
-h_final       = h_prev + h_dum_sub_ran × (−scale)
+h_final       = h_prev + h_dum_sub_ran × (−dummy_scale)
 ```
 
-`scale` accounts for the fact that the dummy target is thicker than the actual
-aluminium walls of the cryo cell.  The thickness ratios are stored in
-`config/run_constants.yaml` under the relevant run period:
+`dummy_scale` accounts for the fact that the dummy target is thicker than the actual
+aluminium walls of the cryo cell.  Only the cell-wall fraction is removed.  The
+thickness ratios are stored in `config/run_constants.yaml` (see below).
 
-```yaml
-period_1:
-  dummy_scale:
-    LH2: 7.2323   # dummy / LH2-wall thickness ratio
-    LD2: 7.7552
-```
-
-For LH2: `scale = 1/7.2323 ≈ 0.138`, removing only ~1.9% of the signal yield.
+For LH2: `dummy_scale = 1/7.2323 ≈ 0.138`, removing ~14% of the dummy yield
+(which is itself ~1–2% of the signal).
 
 **Subtraction order** (when all three are active):
-1. Random subtraction (signal and each background separately)
+1. Random subtraction (signal and each background independently)
 2. e⁺ subtraction
 3. Dummy subtraction
 
@@ -363,12 +371,12 @@ For LH2: `scale = 1/7.2323 ≈ 0.138`, removing only ~1.9% of the signal yield.
 
 ## Diagnostic PDF Pages
 
-| Page | Function | Content |
-|------|----------|---------|
-| 1 | `_page_weights` | Histogram of per-run weights for signal and e⁺; mean marked; exclusions noted |
-| 2 | `_page_ctime` | **Left**: full ctime distribution with real + random windows shaded. **Right**: zoom on real peak, individual per-run windows shown as gray lines, config parameters in text box |
-| 3 … N | `_page_histogram` | One page per histogram. 2–4 panels depending on which subtractions are active (random / e⁺ / dummy). Each panel shows the before/after state with overlays |
-| Last | `_page_statistics` | Run counts, exclusion reasons, file-skip list, full subtraction summary table (fraction subtracted %, max\|pull\|) |
+| Page | Content |
+|------|---------|
+| 1 | **Coincidence-time distribution** — left: full range with discrete random-peak windows shaded (one span per peak, per-run thin lines); centre: zoom on real peak with per-run window boundaries and config text box; right: ctmean ± ctsigma vs run from CSV with weighted-mean fit |
+| 2 | **Normalized yield & run diagnostics** — top row: workflow vs CSV normyield per run for each active run type, flagged runs (>2% residual) marked in red; bottom row: raw event-count comparison (n_real, n_rand×scale, n_rsc vs CSV coin/randoms/ransubcoin); right panel: weight distributions and beam current + normalization components vs run |
+| 3 … N | **Per-histogram subtraction** — one page per histogram, 2–4 panels: "Before random sub" → "After random sub" → "After e⁺ sub" → "After dummy sub". Each panel overlays the relevant background histogram scaled to what is actually subtracted (dummy overlay shown as `dummy×scale − random`) |
+| Last | **Statistics table** — run counts, exclusion reasons, file-skip list, full subtraction summary (fraction subtracted %, max\|pull\| per histogram per subtraction step) |
 
 ---
 
@@ -401,19 +409,32 @@ normalization:
   charge_column: BCM2_Q   # BCM1_Q / BCM2_Q / BCM4A_Q / BCM4B_Q / BCM4C_Q
 
 cuts:
+  # HMS electron PID
   hsdelta_lo:    -8.0      # HMS δ lower bound [%]
   hsdelta_hi:     8.0      # HMS δ upper bound [%]
   hcer_npe_min:   1.0      # HMS Cherenkov NPE threshold
-  hsshsum_min:    0.7      # HMS calorimeter E/p threshold
+  hsshsum_min:    0.7      # HMS calorimeter E/p minimum
+
+  # SHMS pion PID
   psdelta_lo:   -10.0      # SHMS δ lower bound [%]
   psdelta_hi:    20.0      # SHMS δ upper bound [%]
   paero_npe_min:  2.0      # SHMS aerogel NPE threshold
   phgc_npe_min:   1.0      # SHMS HGC NPE threshold
+  psshsum_max:    0.8      # SHMS calorimeter E/p maximum (pion rejection)
+
+  # Coincidence time — real peak
   ctime_real_center:          auto   # "auto" → use ctmean from CSV; or fixed ns value
-  ctime_real_nsigma:          3.0    # half-window = nsigma × ctsigma (auto mode)
-  ctime_real_window_fallback: 2.0    # half-window [ns] when ctsigma is NaN
-  ctime_random_center:  39.2         # random sideband center [ns]
-  ctime_random_window:   6.0         # random sideband half-width [ns]
+  ctime_real_nsigma:          3.0    # half-window = nsigma × ctsigma  (auto mode only)
+                                     # set to null to always use ctime_real_window_fallback
+  ctime_real_window_fallback: 2.0    # half-window [ns] when ctsigma is NaN or nsigma is null
+
+  # Coincidence time — random sideband (discrete beam-bunch peak windows)
+  # Peak centers:  ctmean ± (n_skip + k) × beam_bunch_ns   for k = 1 … n_peaks
+  # win_scale = 1 / (n_peaks_lo + n_peaks_hi)  — constant, independent of run
+  ctime_random_n_skip:     1   # beam-bunch peaks to skip on each side (≥ 1)
+  ctime_random_n_peaks_lo: 3   # random peaks on the low-ctime side  (≥ 0; lo+hi ≥ 1)
+  ctime_random_n_peaks_hi: 3   # random peaks on the high-ctime side (≥ 0; lo+hi ≥ 1)
+  # One-sided example: n_peaks_lo: 6, n_peaks_hi: 0
 
 histograms:
   - name:   phipq
@@ -422,8 +443,44 @@ histograms:
     xmin:   -3.14159265
     xmax:    3.14159265
     xlabel: "#phi_{pq} (rad)"
-    helicity_cut: positive          # optional: positive / negative / omit for all
+
+  - name:   phipq_hplus
+    branch: P_kin_secondary_ph_xq
+    bins:   16
+    xmin:   -3.14159265
+    xmax:    3.14159265
+    xlabel: "#phi_{pq} (rad)  [h+]"
+    helicity_cut: positive   # fill only when effective helicity > 0
+
+  - name:   phipq_hminus
+    branch: P_kin_secondary_ph_xq
+    bins:   16
+    xmin:   -3.14159265
+    xmax:    3.14159265
+    xlabel: "#phi_{pq} (rad)  [h-]"
+    helicity_cut: negative   # fill only when effective helicity < 0
 ```
+
+---
+
+## Run Constants Reference
+
+`config/run_constants.yaml` holds run-period-specific constants that are not part of
+the event-selection config.  It must sit alongside the analysis YAML.
+
+```yaml
+period_1:
+  beam_bunch_ns: 4.008       # beam bunch spacing [ns] — used to place random sideband peaks
+  dummy_scale:
+    LH2: 7.2323              # dummy / LH2-cell-wall thickness ratio
+    LD2: 7.7552              # dummy / LD2-cell-wall thickness ratio
+```
+
+`beam_bunch_ns` is loaded once at pipeline startup (`cfg.beam_bunch_ns(config_dir)`)
+and stored in `PipelineResult.beam_bunch_ns` for use by the diagnostic plots.
+
+`dummy_scale` values are loaded only when `do_dummy_subtraction: true`.  The
+subtraction scale applied to the dummy histogram is `1 / dummy_scale[target]`.
 
 ---
 
@@ -433,10 +490,11 @@ histograms:
 |----------|-------------|-------------|
 | `BRANCH_HSDELTA` | `H_gtr_dp` | HMS focal-plane δ [%] |
 | `BRANCH_HCER_NPE` | `H_cer_npeSum` | HMS Cherenkov NPE sum |
-| `BRANCH_HSSHSUM` | `H_cal_etottracknorm` | HMS calorimeter E/p |
+| `BRANCH_HETOTTRACKNORM` | `H_cal_etottracknorm` | HMS calorimeter E/p |
 | `BRANCH_PSDELTA` | `P_gtr_dp` | SHMS focal-plane δ [%] |
 | `BRANCH_PAERO_NPE` | `P_aero_npeSum` | SHMS aerogel Cherenkov NPE |
 | `BRANCH_PHGC_NPE` | `P_hgcer_npeSum` | SHMS heavy-gas Cherenkov NPE |
+| `BRANCH_PETOTTRACKNORM` | `P_cal_etottracknorm` | SHMS calorimeter E/p |
 | `BRANCH_CTIME` | `CTime_ePiCoinTime_ROC2` | e−π coincidence time [ns] |
 | `BRANCH_HELICITY` | `T_helicity_hel` | Raw helicity (+1 / −1) |
 | `BRANCH_PPi` | `P_gtr_p` | SHMS pion momentum [GeV/c] |
