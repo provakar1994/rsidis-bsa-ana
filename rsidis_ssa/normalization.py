@@ -4,10 +4,11 @@ Per-run normalization weight calculation.
 The per-event weight for run r is:
 
     w_r = (ps_factor_r × boil_corr_r)
-          / (BCM2_Q_r × h_esing_Eff_r × p_hadron_Eff_r × comp_livetime_r)
+          / (Q_r × h_esing_Eff_r × p_hadron_Eff_r × comp_livetime_r)
 
 where:
-  BCM2_Q        — efficiency-corrected beam charge [mC]
+  Q             — efficiency-corrected beam charge [mC], using the
+                  configured normalization charge column
   h_esing_Eff   — HMS electron singles efficiency  (fraction, ~0.9997)
   p_hadron_Eff  — SHMS hadron tracking efficiency  (fraction, ~0.93)
   comp_livetime — computer live-time               (fraction, ~1.0; NOT percent)
@@ -27,7 +28,7 @@ Prescale (ps5/ps6) is extracted and recorded for auditing; in this dataset
 the coin trigger is always unprescaled (ps_factor = 1.0).
 
 Cross-check against the CSV:
-  normyield ≈ ransubcoin / (BCM2_Q × h_esing × p_hadron × comp_livetime)  [~1%]
+  normyield ≈ ransubcoin / (Q × h_esing × p_hadron × comp_livetime)  [~1%]
 The CSV normyield does NOT include boil_corr — it stores the uncorrected
 normalized yield, consistent with the derivation above.
 
@@ -97,7 +98,7 @@ class RunWeight:
     """
     run:          int
     weight:       float   # eff_scale / charge — single-run cross-check only
-    charge:       float   # BCM2_Q [mC]
+    charge:       float   # configured charge-column value [mC]
     h_esing_eff:  float   # HMS electron singles efficiency
     p_hadron_eff: float   # SHMS hadron tracking efficiency
     ps_factor:    float   # prescale factor (1.0 = unprescaled)
@@ -134,7 +135,7 @@ class WeightTableResult:
     excluded : list[RunExclusion]
         Every run that was dropped, with the column and reason.
     Q_tot : float
-        Sum of BCM2_Q [mC] over all valid runs.
+        Sum of the configured charge-column values [mC] over all valid runs.
         Used by the pipeline to divide histograms after filling with eff_scale.
     """
     weights:  dict[int, RunWeight]     = field(default_factory=dict)
@@ -215,6 +216,7 @@ def get_prescale_factor(row: pd.Series) -> float:
 
 def compute_run_weight(
     row: pd.Series,
+    charge_column: str = "BCM2_Q",
     apply_boil_corr: bool = False,
 ) -> RunWeight:
     """
@@ -224,6 +226,8 @@ def compute_run_weight(
     ----------
     row : pd.Series
         A single row from the DataFrame returned by load_runlist().
+    charge_column : str
+        Name of the runlist column to use for beam charge normalization.
     apply_boil_corr : bool
         Pass True for LH2 / LD2 targets.
 
@@ -245,9 +249,9 @@ def compute_run_weight(
                                      message=f"Run {run}: {col} {msg_suffix}")
 
     # ---- charge ----
-    charge = row["BCM2_Q"]
-    _check(charge, "BCM2_Q", pd.notna(charge),        "is NaN")
-    _check(charge, "BCM2_Q", charge > 0,               f"= {charge:.4f} must be > 0")
+    charge = row[charge_column]
+    _check(charge, charge_column, pd.notna(charge),   "is NaN")
+    _check(charge, charge_column, charge > 0,         f"= {charge:.4f} must be > 0")
 
     # ---- HMS electron singles efficiency ----
     h_eff = row["h_esing_Eff"]
@@ -304,6 +308,7 @@ def compute_run_weight(
 
 def build_weight_table(
     df_runs: pd.DataFrame,
+    charge_column: str = "BCM2_Q",
     apply_boil_corr: bool = False,
     log_path: str | Path | None = None,
 ) -> WeightTableResult:
@@ -319,6 +324,8 @@ def build_weight_table(
     ----------
     df_runs : pd.DataFrame
         Subset of the runlist (e.g. the output of get_signal_runs()).
+    charge_column : str
+        Name of the runlist column to use for beam charge normalization.
     apply_boil_corr : bool
         Pass True for LH2 / LD2 targets.
     log_path : path-like or None
@@ -334,7 +341,11 @@ def build_weight_table(
 
     for _, row in df_runs.iterrows():
         try:
-            rw = compute_run_weight(row, apply_boil_corr=apply_boil_corr)
+            rw = compute_run_weight(
+                row,
+                charge_column=charge_column,
+                apply_boil_corr=apply_boil_corr,
+            )
             result.weights[rw.run] = rw
         except NormalizationError as exc:
             excl = RunExclusion(run=exc.run, column=exc.column, reason=str(exc))
@@ -351,7 +362,12 @@ def build_weight_table(
         )
 
     if log_path is not None:
-        _write_log(result, Path(log_path), apply_boil_corr=apply_boil_corr)
+        _write_log(
+            result,
+            Path(log_path),
+            apply_boil_corr=apply_boil_corr,
+            charge_column=charge_column,
+        )
 
     return result
 
@@ -364,6 +380,7 @@ def _write_log(
     result: WeightTableResult,
     log_path: Path,
     apply_boil_corr: bool,
+    charge_column: str,
 ) -> None:
     """Write a structured plain-text log of the weight-table build."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,7 +399,7 @@ def _write_log(
 
         if result.n_valid:
             fh.write("--- Accepted runs ---\n")
-            fh.write(f"  {'run':>8}  {'weight':>14}  {'eff_scale':>14}  {'BCM2_Q':>10}  "
+            fh.write(f"  {'run':>8}  {'weight':>14}  {'eff_scale':>14}  {charge_column:>10}  "
                      f"{'h_eff':>8}  {'p_eff':>8}  {'livetime':>10}  "
                      f"{'boil_corr':>10}  {'ps':>4}\n")
             fh.write("  " + "-" * 95 + "\n")
@@ -440,6 +457,7 @@ def weight_table_to_df(weights: dict[int, RunWeight]) -> pd.DataFrame:
 def check_normyield_consistency(
     weights: dict[int, RunWeight],
     df_runlist: pd.DataFrame,
+    charge_column: str = "BCM2_Q",
     rtol: float = 0.02,
 ) -> pd.DataFrame:
     """
@@ -447,7 +465,8 @@ def check_normyield_consistency(
 
     For each run:
         normyield_expected ≈ ransubcoin / norm_factor_no_boil
-    where norm_factor_no_boil = BCM2_Q × h_eff × p_eff × livetime / ps_factor.
+    where norm_factor_no_boil = Q × h_eff × p_eff × livetime / ps_factor,
+    using the configured charge column.
 
     The CSV normyield does not include boil_corr (confirmed from data),
     so this check is valid for both cryo and non-cryo runs.

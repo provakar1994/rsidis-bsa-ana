@@ -521,26 +521,35 @@ def run_pipeline(
     # ---- weight tables ----
     weight_tables: dict[str, WeightTableResult] = {}
     file_skips:    dict[str, list[int]] = {}
+    charge_column = cfg.normalization.charge_column
 
     # Signal (e⁻) runs
     df_signal = get_signal_runs(df_setting)
     logger.info("Signal runs: %d", len(df_signal))
     weight_tables["signal"] = build_weight_table(
-        df_signal, apply_boil_corr=cfg.apply_boil_corr
+        df_signal,
+        charge_column=charge_column,
+        apply_boil_corr=cfg.apply_boil_corr,
     )
 
     # e⁺ background runs
     if cfg.do_eplus_subtraction:
         df_eplus = get_eplus_runs(df_setting)
         logger.info("e+ runs: %d", len(df_eplus))
-        weight_tables["eplus"] = build_weight_table(df_eplus, apply_boil_corr=cfg.apply_boil_corr)
+        weight_tables["eplus"] = build_weight_table(
+            df_eplus,
+            charge_column=charge_column,
+            apply_boil_corr=cfg.apply_boil_corr,
+        )
 
     # Dummy runs
     if cfg.do_dummy_subtraction:
         df_dummy = get_dummy_runs(df_all, setting)
         logger.info("Dummy runs: %d", len(df_dummy))
         weight_tables["dummy"] = build_weight_table(
-            df_dummy, apply_boil_corr=False
+            df_dummy,
+            charge_column=charge_column,
+            apply_boil_corr=False,
         )
 
     # ---- dummy scale ----
