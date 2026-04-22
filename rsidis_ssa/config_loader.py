@@ -441,6 +441,43 @@ class AnalysisConfig(BaseModel):
             )
         return float(period["beam_bunch_ns"])
 
+    def beam_polarization(self, config_dir: Optional[Path] = None) -> float:
+        """
+        Return the beam polarization magnitude |P_e| for this run period,
+        loaded from run_constants.yaml.
+
+        Used to convert the raw beam-helicity asymmetry to the physics asymmetry:
+            A_phys = A_raw / beam_polarization
+
+        Raises FileNotFoundError if run_constants.yaml is not found.
+        Raises KeyError if the run_period or beam_polarization key is missing.
+        """
+        constants_path = self.resolve_run_constants_path(config_dir)
+        if not constants_path.exists():
+            raise FileNotFoundError(
+                f"run_constants.yaml not found: {constants_path}\n"
+                f"Expected alongside the analysis config in {constants_path.parent}"
+            )
+        with constants_path.open() as fh:
+            data = yaml.safe_load(fh)
+        if self.run_period not in data:
+            raise KeyError(
+                f"run_period '{self.run_period}' not found in {constants_path}."
+            )
+        period = data[self.run_period]
+        if "beam_polarization" not in period:
+            raise KeyError(
+                f"'beam_polarization' not found in period '{self.run_period}' of "
+                f"{constants_path}. Add it as a top-level key under the period."
+            )
+        val = float(period["beam_polarization"])
+        if not (0.0 < val <= 1.0):
+            raise ValueError(
+                f"beam_polarization must be in (0, 1], got {val} "
+                f"(period '{self.run_period}' of {constants_path})"
+            )
+        return val
+
     def histogram_names(self) -> list[str]:
         return [h.name for h in self.histograms]
 

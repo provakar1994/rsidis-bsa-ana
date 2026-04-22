@@ -19,6 +19,7 @@ One YAML config file drives one complete analysis (one kinematic setting, one ta
    - [Step 6 — Histogram Filling](#step-6--histogram-filling)
    - [Step 7 — Run Combination](#step-7--run-combination)
    - [Step 8 — Background Subtraction](#step-8--background-subtraction)
+   - [Step 9 — Asymmetry Calculation](#step-9--asymmetry-calculation)
 5. [Diagnostic PDF Pages](#diagnostic-pdf-pages)
 6. [Configuration Reference](#configuration-reference)
 7. [Run Constants Reference](#run-constants-reference)
@@ -60,7 +61,7 @@ ssa/
     ├── histograms.py            # Histogram registry creation and filling
     ├── pipeline.py              # Orchestrates all of the above
     ├── backgrounds.py           # Random / e⁺ / dummy subtraction
-    └── (asymmetry.py            # Phase 6 — not yet implemented)
+    └── asymmetry.py             # Per-bin A_LU and sin(φ) amplitude fit
 
 tests/
     test_config_loader.py
@@ -70,6 +71,7 @@ tests/
     test_cuts.py
     test_histograms.py
     test_backgrounds.py
+    test_asymmetry.py
 ```
 
 ---
@@ -369,6 +371,147 @@ For LH2: `dummy_scale = 1/7.2323 ≈ 0.138`, removing ~14% of the dummy yield
 
 ---
 
+### Step 9 — Asymmetry Calculation
+
+`rsidis_ssa/asymmetry.py` implements the full per-bin SSA and the sin(φ) amplitude
+extraction.  It operates on the **final** background-subtracted, charge-normalised
+`bh.Histogram` objects produced by Step 8.
+
+#### 9a — Per-bin raw asymmetry (`compute_raw_asymmetry`)
+
+For each φ bin k with fully-subtracted weighted yields W_+ and W_−:
+
+```
+A_raw(φ_k) = (W_+(φ_k) − W_-(φ_k)) / (W_+(φ_k) + W_-(φ_k))
+```
+
+Bins where W_+ + W_− ≤ 0 (empty after subtraction) are set to NaN and excluded
+from the fit without raising an exception.
+
+**Statistical uncertainty — exact error propagation:**
+
+```
+σ²_A(φ_k) = 4 [W_+²(φ_k) Var(W_-,φ_k) + W_-²(φ_k) Var(W_+,φ_k)]
+             ──────────────────────────────────────────────────────
+                           (W_+(φ_k) + W_-(φ_k))⁴
+```
+
+This is exact first-order error propagation through the asymmetry formula; no
+approximation is made.  The variances `Var(W_±, φ_k)` are read directly from
+boost_histogram's `Weight` storage via `h.variances()`.
+
+**What is stored in the variances?**
+
+The `Weight` storage tracks both the weighted sum and the sum of squared weights
+separately.  Every arithmetic operation on the histogram (subtraction, scaling)
+propagates these through the standard rules:
+
+| Operation | New variance |
+|-----------|-------------|
+| Fill with weight w | `Var += w²` |
+| `h *= c` | `Var *= c²` |
+| `h = h_a + h_b × (−1)` | `Var = Var_a + Var_b` |
+
+**Two-stage weighting scheme** (important for understanding the variance):
+
+Events are *not* filled with the full per-run weight `w_r = eff_scale_r / Q_r`.
+Instead the pipeline uses a deliberate two-stage approach:
+
+1. **Fill stage** — each event is filled with the charge-independent factor
+   `eff_scale_r = ps_r × boil_r / (h_e_r × p_h_r × lt_r)`.  Q_r is *excluded*.
+2. **Post-loop rescaling** — after all runs are accumulated the entire histogram is
+   multiplied by `1/Q_tot` where `Q_tot = Σ_r Q_r`.
+
+This factoring is correct because it gives the same final yield as filling with
+`w_r` individually, while avoiding a problem with variance: if Q_r varied greatly
+between runs, filling with the full `w_r` would cause high-charge runs to have
+disproportionately small variance per event, skewing the combined uncertainty.
+By using `eff_scale_r` (which varies only due to efficiencies and live-time) the
+variance is dominated by counting statistics, not by charge fluctuations.
+
+After the full pipeline the variance in each bin contains:
+
+```
+Var(W_±, φ_k) = (1/Q_tot)² × [ Σ_r  eff_scale_r²  × n_r^±(φ_k)
+                                + Σ_r  (eff_scale_r × win_scale)² × m_r^±(φ_k) ]
+```
+for signal-only; with e⁺ and dummy contributions added analogously when those
+subtractions are active (each uses its own `eff_scale_r` and `Q_tot`).
+
+where:
+- `eff_scale_r = ps_r × boil_r / (h_e_r × p_h_r × lt_r)` — charge-independent scale (Step 7)
+- `Q_tot = Σ_r Q_r` — total beam charge over all valid runs [mC]
+- `win_scale = 1/(n_peaks_lo + n_peaks_hi)` — random-sideband area ratio (Step 7)
+- `n_r^±(φ_k)` — raw event count in bin k, helicity ±, run r, passing all cuts
+- `m_r^±(φ_k)` — raw event count across all random-sideband windows
+
+**Why edge bins have larger errors:**
+
+The dominant effect is **detector acceptance**: the HMS + SHMS geometric acceptance
+falls off near φ = ±π, giving fewer events per bin.  Statistical uncertainty scales
+as `1/√(effective N)` and is inherently larger where acceptance is low.
+
+A secondary contribution comes from `eff_scale` variation: the per-bin variance is
+`Σ_r eff_scale_r² n_r` rather than `(Σ_r n_r) × eff_scale_avg²`.  Where one run
+dominates a bin (because the others have near-zero acceptance there), the single
+run's `eff_scale_r²` drives the variance — but `eff_scale` variation between runs
+is typically small (a few percent), so this effect is minor compared with the raw
+counting statistics.
+
+#### 9b — Physics asymmetry
+
+```
+A_phys(φ_k) = A_raw(φ_k) / P_beam
+σ_A_phys(φ_k) = σ_A_raw(φ_k) / P_beam
+```
+
+`P_beam` is loaded from `run_constants.yaml` (key `beam_polarization` in the run
+period block).
+
+#### 9c — sin(φ) amplitude (`fit_sinphi`)
+
+The amplitude A_LU^sinφ is extracted by **analytic single-parameter weighted
+least-squares**, fitting the model f(φ_k) = A × sin(φ_k) to A_phys(φ_k).
+
+Bins with NaN A_phys, NaN σ_A_phys, or σ_A_phys = 0 are excluded.  If fewer than
+2 valid bins remain all output quantities are NaN.
+
+```
+         Σ_k  A_phys(φ_k) × sin(φ_k) / σ²_k
+A_fit  = ────────────────────────────────────
+              Σ_k  sin²(φ_k) / σ²_k
+
+σ_fit  =  1 / √(Σ_k  sin²(φ_k) / σ²_k)
+
+χ²/ndf = [Σ_k  (A_phys(φ_k) − A_fit × sin(φ_k))² / σ²_k] / (N_valid − 1)
+```
+
+No external solver (scipy) is used; the solution is closed-form.
+
+---
+
+#### Comparison with `daveg/SSA/ssa.py`
+
+Both implementations use the same algebraic formula for σ²_A.  The key differences
+are in what the histogram values and variances actually contain.
+
+| Aspect | `daveg/SSA/ssa.py` | This workflow |
+|--------|-------------------|---------------|
+| Yield used for asymmetry | Raw boost_histogram fills from `makehelhistos` at the "after random subtraction" step (`histos[14/15, 3]`) | Fully-subtracted, charge-normalised bh.Histogram from the complete pipeline |
+| Normalization weights | Charge normalisation applied globally (÷ Q_tot); individual events likely filled with weight = 1/Q_per_run or similar | Two-stage: fill with `eff_scale_r = ps × boil / (h_e × p_h × lt)` (no Q_r), then divide all histograms by `Q_tot = Σ Q_r` after the loop |
+| Variance from backgrounds | Random subtraction propagated via Weight storage | Random + e⁺ + dummy subtraction all propagated via Weight storage |
+| Amplitude fit | `scipy.optimize.curve_fit` — numerical χ² minimisation | Analytic WLS (closed-form, equivalent result for a single-parameter linear model) |
+| χ²/ndf denominator | Not explicitly computed | N_valid − 1 |
+| Bins with σ = 0 | The `+0.000001` guard in the denominator of A_raw prevents division-by-zero but propagates a spuriously small error | Excluded entirely (masked to NaN before fit) |
+
+The `+0.000001` hack in Dave's code (`phi_asy = ... / (phisum + 0.000001)`) does not
+affect non-empty bins meaningfully, but it also does not set empty bins to NaN, so
+they appear as A ≈ 0 with σ ≈ ∞ in the fit — which scipy's curve_fit down-weights
+via the sigma argument.  This workflow's approach (explicit NaN for empty bins,
+excluded from WLS) is equivalent in practice but cleaner.
+
+---
+
 ## Diagnostic PDF Pages
 
 | Page | Content |
@@ -376,6 +519,7 @@ For LH2: `dummy_scale = 1/7.2323 ≈ 0.138`, removing ~14% of the dummy yield
 | 1 | **Coincidence-time distribution** — left: full range with discrete random-peak windows shaded (one span per peak, per-run thin lines); centre: zoom on real peak with per-run window boundaries and config text box; right: ctmean ± ctsigma vs run from CSV with weighted-mean fit |
 | 2 | **Normalized yield & run diagnostics** — top row: workflow vs CSV normyield per run for each active run type, flagged runs (>2% residual) marked in red; bottom row: raw event-count comparison (n_real, n_rand×scale, n_rsc vs CSV coin/randoms/ransubcoin); right panel: weight distributions and beam current + normalization components vs run |
 | 3 … N | **Per-histogram subtraction** — one page per histogram, 2–4 panels: "Before random sub" → "After random sub" → "After e⁺ sub" → "After dummy sub". Each panel overlays the relevant background histogram scaled to what is actually subtracted (dummy overlay shown as `dummy×scale − random`) |
+| N+1 | **Beam SSA** — one row per helicity-split pair (e.g. `phipq_hplus`/`phipq_hminus`): left panel shows A_phys vs φ on auto-scale; right panel shows the same data zoomed to y ∈ (−0.1, 0.1).  Both panels overlay the best-fit A × sin(φ) curve.  Info box: amplitude ± σ, χ²/ndf, N_bins used, P_beam. |
 | Last | **Statistics table** — run counts, exclusion reasons, file-skip list, full subtraction summary (fraction subtracted %, max\|pull\| per histogram per subtraction step) |
 
 ---
@@ -470,7 +614,8 @@ the event-selection config.  It must sit alongside the analysis YAML.
 
 ```yaml
 period_1:
-  beam_bunch_ns: 4.008       # beam bunch spacing [ns] — used to place random sideband peaks
+  beam_bunch_ns:     4.008   # beam bunch spacing [ns] — places random sideband peaks
+  beam_polarization: 0.85    # |P_e| in (0, 1] — converts A_raw → A_phys
   dummy_scale:
     LH2: 7.2323              # dummy / LH2-cell-wall thickness ratio
     LD2: 7.7552              # dummy / LD2-cell-wall thickness ratio
@@ -478,6 +623,10 @@ period_1:
 
 `beam_bunch_ns` is loaded once at pipeline startup (`cfg.beam_bunch_ns(config_dir)`)
 and stored in `PipelineResult.beam_bunch_ns` for use by the diagnostic plots.
+
+`beam_polarization` is loaded by `cfg.beam_polarization(config_dir)` when the
+asymmetry page is generated.  It must be in (0, 1]; a value outside this range raises
+`ValueError`.
 
 `dummy_scale` values are loaded only when `do_dummy_subtraction: true`.  The
 subtraction scale applied to the dummy histogram is `1 / dummy_scale[target]`.

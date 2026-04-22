@@ -619,27 +619,39 @@ def run_pipeline(
 
     eplus_regs = None
     if cfg.do_eplus_subtraction:
-        (eplus_regs, eplus_skips,
-         ctime_hists["eplus"], ctime_run_windows["eplus"],
-         ctime_random_run_windows["eplus"],
-         normyield_per_run["eplus"]) = (
-            _fill_run_type(df_eplus, weight_tables["eplus"], cfg, "eplus",
-                           beam_bunch, config_dir, ctime_override=signal_ctime_override)
-        )
-        run_dfs["eplus"] = df_eplus
-        file_skips["eplus"] = eplus_skips
+        if df_eplus.empty:
+            logger.warning(
+                "do_eplus_subtraction=True but no e⁺ runs found in runlist "
+                "— skipping e⁺ subtraction"
+            )
+        else:
+            (eplus_regs, eplus_skips,
+             ctime_hists["eplus"], ctime_run_windows["eplus"],
+             ctime_random_run_windows["eplus"],
+             normyield_per_run["eplus"]) = (
+                _fill_run_type(df_eplus, weight_tables["eplus"], cfg, "eplus",
+                               beam_bunch, config_dir, ctime_override=signal_ctime_override)
+            )
+            run_dfs["eplus"] = df_eplus
+            file_skips["eplus"] = eplus_skips
 
     dummy_regs = None
     if cfg.do_dummy_subtraction:
-        (dummy_regs, dummy_skips,
-         ctime_hists["dummy"], ctime_run_windows["dummy"],
-         ctime_random_run_windows["dummy"],
-         normyield_per_run["dummy"]) = (
-            _fill_run_type(df_dummy, weight_tables["dummy"], cfg, "dummy",
-                           beam_bunch, config_dir, ctime_override=signal_ctime_override)
-        )
-        run_dfs["dummy"] = df_dummy
-        file_skips["dummy"] = dummy_skips
+        if df_dummy.empty:
+            logger.warning(
+                "do_dummy_subtraction=True but no dummy runs found in runlist "
+                "— skipping dummy subtraction"
+            )
+        else:
+            (dummy_regs, dummy_skips,
+             ctime_hists["dummy"], ctime_run_windows["dummy"],
+             ctime_random_run_windows["dummy"],
+             normyield_per_run["dummy"]) = (
+                _fill_run_type(df_dummy, weight_tables["dummy"], cfg, "dummy",
+                               beam_bunch, config_dir, ctime_override=signal_ctime_override)
+            )
+            run_dfs["dummy"] = df_dummy
+            file_skips["dummy"] = dummy_skips
 
     return PipelineResult(
         signal=signal_regs,

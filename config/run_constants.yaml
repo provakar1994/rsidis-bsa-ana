@@ -14,7 +14,8 @@
 # ============================================================
 
 period_1:   # First run period (pass 0, 2025)
-  beam_bunch_ns: 4.0   # beam bunch spacing [ns]; random half-win = wscale × (beam_bunch_ns/2)
+  beam_bunch_ns:    4.0    # beam bunch spacing [ns]
+  beam_polarization: 1.0  # |P_e|, dimensionless (0–1); used to convert A_raw → A_phys
   dummy_scale:
     LH2: 7.2323
     LD2: 7.7552

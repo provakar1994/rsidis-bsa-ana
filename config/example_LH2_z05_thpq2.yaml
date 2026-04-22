@@ -5,7 +5,7 @@
 
 # ---- Kinematic setting ----
 setting:
-  ebeam:    8.5831
+  ebeam:    10.6716
   x:        0.25
   Q2:       3.3
   z:        0.5

@@ -40,6 +40,11 @@ from rsidis_ssa.backgrounds import (
     subtract_randoms,
     subtraction_summary,
 )
+from rsidis_ssa.asymmetry import (
+    AsymmetryResult,
+    compute_asymmetry,
+    find_asymmetry_pairs,
+)
 from rsidis_ssa.normalization import weight_table_to_df
 from rsidis_ssa.pipeline import PipelineResult, run_pipeline_from_yaml
 
@@ -768,6 +773,131 @@ def _page_histogram(
 
 
 # ---------------------------------------------------------------------------
+# Asymmetry page
+# ---------------------------------------------------------------------------
+
+def _page_asymmetry(
+    pdf:        PdfPages,
+    result:     PipelineResult,
+    final:      dict[str, object],
+    config_dir: Path | None = None,
+) -> list[AsymmetryResult]:
+    """
+    Compute and plot the beam SSA (A_LU^sinφ) for every helicity-split pair.
+
+    For each pair (foo_hplus, foo_hminus) found in *final*, one subplot is
+    produced showing:
+      - per-bin A_phys ± σ  (blue circles with error bars)
+      - fitted A × sin(φ) curve  (red line)
+      - zero reference line  (gray dashed)
+      - text box: fitted amplitude, uncertainty, χ²/ndf, P_beam
+
+    Returns the list of AsymmetryResult objects for use by the statistics page.
+    Returns an empty list and skips the page when no pairs are found or
+    beam_polarization is not configured.
+    """
+    cfg   = result.cfg
+    pairs = find_asymmetry_pairs(list(final.keys()))
+    if not pairs:
+        return []
+
+    try:
+        P_beam = cfg.beam_polarization(config_dir)
+    except (FileNotFoundError, KeyError) as exc:
+        logger.warning("Skipping asymmetry page: %s", exc)
+        return []
+
+    asym_results: list[AsymmetryResult] = []
+    n_pairs = len(pairs)
+    ZOOM_LO, ZOOM_HI = -0.1, 0.1   # y-axis limits for the zoomed column
+
+    # Layout: one row per pair, two columns (full + zoomed)
+    fig, axes_grid = plt.subplots(
+        n_pairs, 2,
+        figsize=(11.0, 4.5 * n_pairs),
+        sharey=False,
+    )
+    # Normalise to 2-D array regardless of n_pairs
+    if n_pairs == 1:
+        axes_grid = axes_grid.reshape(1, 2)
+
+    fig.suptitle(
+        f"Beam SSA  —  $A_{{LU}}^{{\\sin\\phi}}$   "
+        f"($P_{{\\rm beam}} = {P_beam:.2f}$)",
+        fontsize=11, fontweight="bold",
+    )
+
+    phi_fit = np.linspace(-np.pi, np.pi, 200)
+
+    for row, (base, hplus_name, hminus_name) in enumerate(pairs):
+        h_plus  = final[hplus_name]
+        h_minus = final[hminus_name]
+
+        ar = compute_asymmetry(h_plus, h_minus, P_beam, base)
+        asym_results.append(ar)
+
+        valid = np.isfinite(ar.A_phys) & np.isfinite(ar.A_phys_err)
+        phi_v = ar.phi_centers[valid]
+        A_v   = ar.A_phys[valid]
+        dA_v  = ar.A_phys_err[valid]
+
+        # Bin half-width for horizontal error bars
+        hw = 0.5 * (ar.phi_centers[1] - ar.phi_centers[0]) if len(ar.phi_centers) > 1 else 0.0
+
+        fit_curve = ar.amplitude * np.sin(phi_fit) if np.isfinite(ar.amplitude) else None
+
+        for col in range(2):
+            ax = axes_grid[row, col]
+            ax.axhline(0.0, color="gray", lw=0.9, ls="--", zorder=1)
+            ax.errorbar(phi_v, A_v, yerr=dA_v, xerr=hw,
+                        fmt="o", color="steelblue", ms=5, lw=1.2, capsize=3,
+                        label=r"$A_{\rm phys}(\phi_k)$", zorder=3)
+            if fit_curve is not None:
+                ax.plot(phi_fit, fit_curve,
+                        color="tomato", lw=1.5, zorder=2,
+                        label=rf"$A \sin\phi$  fit")
+            ax.set_xlim(-np.pi * 1.05, np.pi * 1.05)
+            ax.set_xlabel(r"$\phi_{pq}$ (rad)")
+            ax.set_ylabel(r"$A_{LU}$")
+
+            if col == 0:
+                # Full auto-scale column: title + info box
+                ax.set_title(base)
+                ax.legend(fontsize=7)
+                if np.isfinite(ar.amplitude):
+                    info = (
+                        rf"$A_{{LU}}^{{\sin\phi}} = {ar.amplitude:+.4f} \pm {ar.amplitude_err:.4f}$"
+                        f"\n$\\chi^2/\\mathrm{{ndf}} = {ar.chi2_ndf:.2f}$"
+                        f"\n$N_{{\\rm bins}} = {ar.n_bins_used}$"
+                        f"\n$P_{{\\rm beam}} = {P_beam:.2f}$"
+                    )
+                else:
+                    info = "fit: insufficient bins"
+                ax.text(0.97, 0.97, info, transform=ax.transAxes,
+                        va="top", ha="right", fontsize=7, family="monospace",
+                        bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
+            else:
+                # Zoomed column
+                ax.set_ylim(ZOOM_LO, ZOOM_HI)
+                ax.set_title(f"{base}  [zoom: {ZOOM_LO}, {ZOOM_HI}]", fontsize=9)
+
+        logger.info(
+            "Asymmetry [%s]  A_LU^sinphi = %+.4f ± %.4f  chi2/ndf = %.2f  "
+            "(%d bins, P_beam=%.2f)",
+            base,
+            ar.amplitude if np.isfinite(ar.amplitude) else float("nan"),
+            ar.amplitude_err if np.isfinite(ar.amplitude_err) else float("nan"),
+            ar.chi2_ndf if np.isfinite(ar.chi2_ndf) else float("nan"),
+            ar.n_bins_used, P_beam,
+        )
+
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
+    return asym_results
+
+
+# ---------------------------------------------------------------------------
 # Last page: statistics table
 # ---------------------------------------------------------------------------
 
@@ -898,10 +1028,11 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
                 dummy_scale  = result.dummy_scale,
             )
 
+        _page_asymmetry(pdf, result, final, config_dir=yaml_path.parent)
         _page_statistics(pdf, result, sub_results)
 
     logger.info("Done → %s  (%d pages)", output_pdf,
-                len(cfg.histograms) + 3)
+                len(cfg.histograms) + 4)
 
 
 def main() -> None:
