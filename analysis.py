@@ -8,7 +8,7 @@ Produces a multi-page PDF with:
   Page 1  : Coincidence-time distribution — full range + zoom on real peak
             with per-run window boundaries and cut regions shaded
   Page 2  : Normalized yield vs run number, raw count comparisons,
-            and run weight distributions
+            signal run weights, and normalization/current vs run
   Page 3+ : Per-histogram background subtraction — real / random / e⁺
             overlaid, plus the final subtracted result
   Last    : Subtraction statistics table
@@ -30,6 +30,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.lines import Line2D
 from matplotlib.backends.backend_pdf import PdfPages
 
 from rsidis_ssa.backgrounds import (
@@ -95,6 +96,33 @@ def _make_summary_text(sub_results: list[SubtractionResult]) -> str:
     return "\n".join(lines)
 
 
+def _ps5_runs(result: PipelineResult) -> set[int]:
+    """Return the set of run numbers whose active prescale slot is ps5."""
+    ps5_runs: set[int] = set()
+    for df in result.run_dfs.values():
+        if df is None or df.empty or "ps5" not in df.columns or "ps6" not in df.columns:
+            continue
+        for _, row in df.iterrows():
+            ps5 = pd.to_numeric(row.get("ps5"), errors="coerce")
+            ps6 = pd.to_numeric(row.get("ps6"), errors="coerce")
+            ps5_on = pd.notna(ps5) and ps5 > 0
+            ps6_on = pd.notna(ps6) and ps6 > 0
+            if ps5_on and not ps6_on:
+                ps5_runs.add(int(row["run"]))
+    return ps5_runs
+
+
+def _set_run_xticks(ax, x_positions, run_numbers, result: PipelineResult, fontsize: int = 6) -> None:
+    """
+    Set run-number x ticks and color ps5-active runs red.
+    """
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(run_numbers, rotation=45, ha="right", fontsize=fontsize)
+    ps5_runs = _ps5_runs(result)
+    for tick, run in zip(ax.get_xticklabels(), run_numbers):
+        tick.set_color("crimson" if int(run) in ps5_runs else "black")
+
+
 # ---------------------------------------------------------------------------
 # Weight distributions
 # ---------------------------------------------------------------------------
@@ -121,6 +149,160 @@ def _draw_weight_panel(ax, label: str, result: PipelineResult) -> None:
         ax.text(0.98, 0.97, f"{wt.n_excluded} run(s) excluded",
                 transform=ax.transAxes, ha="right", va="top",
                 fontsize=7, color="crimson")
+
+
+def _plot_normcomponents_and_current_vs_run(ax, result: PipelineResult) -> None:
+    """
+    Plot per-run normalization components and beam current on twin y-axes.
+
+    Left axis  — normalization components
+    Right axis — beam current, from the CSV column derived from
+                 normalization.charge_column by replacing ``_Q`` with ``_I``.
+    """
+    charge_col = result.cfg.normalization.charge_column
+    current_col = charge_col.replace("_Q", "_I")
+
+    series = [
+        ("signal", "o", "steelblue"),
+        ("eplus",  "s", "tomato"),
+        ("dummy",  "^", "darkorange"),
+    ]
+
+    run_data: dict[str, pd.DataFrame] = {}
+    all_runs: list[int] = []
+    missing_current_labels: list[str] = []
+
+    for label, _, _ in series:
+        wt = result.weight_tables.get(label)
+        df_runs = result.run_dfs.get(label)
+        if wt is None or df_runs is None or df_runs.empty:
+            continue
+
+        if current_col not in df_runs.columns:
+            missing_current_labels.append(label)
+            continue
+
+        df_w = weight_table_to_df(wt.weights)[[
+            "run",
+            "h_esing_Eff",
+            "p_hadron_Eff",
+            "comp_livetime",
+            "boil_corr",
+            "ps_factor",
+        ]]
+        df_plot = df_runs[["run", current_col]].copy()
+        df_plot[current_col] = pd.to_numeric(df_plot[current_col], errors="coerce")
+        df_plot = df_plot.merge(df_w, on="run", how="inner").sort_values("run")
+        if df_plot.empty:
+            continue
+
+        ok = (
+            np.isfinite(df_plot["h_esing_Eff"].values)
+            & np.isfinite(df_plot["p_hadron_Eff"].values)
+            & np.isfinite(df_plot["comp_livetime"].values)
+            & np.isfinite(df_plot["boil_corr"].values)
+            & np.isfinite(df_plot[current_col].values)
+        )
+        if not ok.any():
+            continue
+
+        run_data[label] = df_plot.loc[
+            ok,
+            ["run", "h_esing_Eff", "p_hadron_Eff", "comp_livetime",
+             "boil_corr", "ps_factor", current_col],
+        ].copy()
+        all_runs.extend(run_data[label]["run"].astype(int).tolist())
+
+    if not run_data:
+        ax.set_visible(False)
+        return
+
+    sorted_runs = sorted(set(all_runs))
+    run_to_x = {run: idx for idx, run in enumerate(sorted_runs)}
+    ax_r = ax.twinx()
+    component_specs = [
+        ("h_esing_Eff",   "h_esing",  "steelblue",  "-",  5),
+        ("p_hadron_Eff",  "p_hadron", "seagreen",   "--", 4),
+        ("comp_livetime", "livetime", "darkorange", "-.", 3),
+        ("boil_corr",     "boil",     "purple",     ":",  2),
+    ]
+
+    for label, marker, _ in series:
+        df_plot = run_data.get(label)
+        if df_plot is None:
+            continue
+
+        runs = df_plot["run"].astype(int).values
+        x = np.array([run_to_x[r] for r in runs])
+        current_vals = df_plot[current_col].values
+
+        for comp_col, comp_label, comp_color, comp_ls, comp_z in component_specs:
+            ax.plot(
+                x,
+                df_plot[comp_col].values,
+                marker=marker,
+                color=comp_color,
+                ms=4,
+                lw=0.9,
+                ls=comp_ls,
+                alpha=0.9,
+                zorder=comp_z,
+                label=f"{comp_label} ({label})",
+            )
+        ax_r.plot(
+            x,
+            current_vals,
+            marker=marker,
+            color="black",
+            ms=4.5,
+            lw=1.2,
+            ls="--",
+            mfc="white",
+            mec="black",
+            alpha=0.95,
+            zorder=4,
+            label=f"current ({label})",
+        )
+
+    _set_run_xticks(ax, np.arange(len(sorted_runs)), sorted_runs, result, fontsize=6)
+    ax.set_xlim(-0.5, len(sorted_runs) - 0.5)
+    ax.set_xlabel("run number")
+    ax.set_ylabel("normalization components")
+    ax_r.set_ylabel(f"{current_col}  (in uA from CSV)")
+    ax_r.tick_params(axis="y", colors="black")
+    ax_r.spines["right"].set_color("black")
+    ax.set_title("Normalization components and beam current vs run")
+
+    quantity_handles = [
+        Line2D([0], [0], color="steelblue", lw=1.2, ls="-",  marker=None, label="h_esing"),
+        Line2D([0], [0], color="seagreen", lw=1.2, ls="--", marker=None, label="p_hadron"),
+        Line2D([0], [0], color="darkorange", lw=1.2, ls="-.", marker=None, label="livetime"),
+        Line2D([0], [0], color="purple", lw=1.2, ls=":", marker=None, label="boil_corr"),
+        Line2D([0], [0], color="black", lw=1.2, ls="--", marker=None, label="current"),
+    ]
+    run_type_handles = [
+        Line2D([0], [0], color="0.25", lw=0, marker="o", ms=5, label="signal"),
+        Line2D([0], [0], color="0.25", lw=0, marker="s", ms=5, label="eplus"),
+        Line2D([0], [0], color="0.25", lw=0, marker="^", ms=5, label="dummy"),
+    ]
+    legend_quantities = ax.legend(
+        handles=quantity_handles,
+        fontsize=6,
+        ncol=3,
+        loc="center left",
+        title="quantity",
+        title_fontsize=6,
+    )
+    ax.add_artist(legend_quantities)
+    ax.legend(
+        handles=run_type_handles,
+        fontsize=6,
+        ncol=3,
+        loc="center right",
+        #bbox_to_anchor=(0.0, 0.84),
+        title="run type",
+        title_fontsize=6,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -298,8 +480,7 @@ def _plot_ctmean_vs_run(ax, result: PipelineResult) -> None:
 
     # ── Step 3: x-axis ticks — one tick per run, label = run number ──
     x_all = np.arange(len(sorted_runs))
-    ax.set_xticks(x_all)
-    ax.set_xticklabels(sorted_runs, rotation=45, ha="right", fontsize=6)
+    _set_run_xticks(ax, x_all, sorted_runs, result, fontsize=6)
     ax.set_xlim(-0.5, len(sorted_runs) - 0.5)
 
     # ── Step 4: weighted-mean fit (signal only, so dummy runs don't bias it) ──
@@ -340,7 +521,8 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
     Row 2 — raw event counts: workflow (n_real, n_random, n_rsc)
              vs CSV (coin, randoms, ransubcoin) per run.
              This row isolates where the discrepancy originates.
-    Row 3 — run weight distributions for signal and eplus.
+    Row 3 — signal run-weight distribution, plus normalization components
+             and beam current vs run number for signal/eplus/dummy.
 
     Flagged runs (|residual| > 2%) are marked with a red × on row 1.
     """
@@ -350,7 +532,8 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
     if not labels:
         return
 
-    n_cols = len(labels)
+    n_label_cols = len(labels)
+    n_cols = max(n_label_cols, 2)
     fig, all_axes = plt.subplots(3, n_cols,
                                  figsize=(5.5 * n_cols, 12.0),
                                  sharey=False)
@@ -359,7 +542,8 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
         all_axes = [[all_axes[0]], [all_axes[1]], [all_axes[2]]]
     top_axes, mid_axes, bot_axes = all_axes[0], all_axes[1], all_axes[2]
 
-    fig.suptitle("Normalized yield, raw counts, and run weights", fontsize=11, fontweight="bold")
+    fig.suptitle("Normalized yield, raw counts, run weights, and beam current",
+                 fontsize=11, fontweight="bold")
 
     run_colors = {"signal": "steelblue", "eplus": "tomato", "dummy": "darkorange"}
 
@@ -390,8 +574,7 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
                        marker="x", color="crimson", s=80, zorder=5, lw=2,
                        label="flagged (>2%)" if idx == 0 else "_nolegend_")
 
-        ax.set_xticks(x)
-        ax.set_xticklabels(runs, rotation=45, ha="right", fontsize=6)
+        _set_run_xticks(ax, x, runs, result, fontsize=6)
         ax.set_xlabel("run number")
         ax.set_ylabel("normyield  (counts mC⁻¹)")
         ax.set_title(f"{label}  ({wt.n_valid} runs,  Q_tot = {wt.Q_tot:.1f} mC)")
@@ -452,8 +635,7 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
                          fontsize=7, family="monospace",
                          bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
 
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(runs, rotation=45, ha="right", fontsize=6)
+        _set_run_xticks(ax2, x, runs, result, fontsize=6)
         ax2.set_xlabel("run number")
         ax2.set_ylabel("event counts")
         ax2.set_title(f"{label} — raw count comparison")
@@ -461,11 +643,16 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
         if idx == 0:
             ax2.legend(fontsize=6)
 
-    for ax, label in zip(bot_axes, labels):
-        if label in {"signal", "eplus"}:
-            _draw_weight_panel(ax, label, result)
-        else:
-            ax.set_visible(False)
+    for idx in range(n_label_cols, n_cols):
+        top_axes[idx].set_visible(False)
+        mid_axes[idx].set_visible(False)
+
+    if len(bot_axes) >= 1:
+        _draw_weight_panel(bot_axes[0], "signal", result)
+    if len(bot_axes) >= 2:
+        _plot_normcomponents_and_current_vs_run(bot_axes[1], result)
+    for ax in bot_axes[2:]:
+        ax.set_visible(False)
 
     skips = {k: len(v) for k, v in result.file_skips.items() if v}
     if skips:
