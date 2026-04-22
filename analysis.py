@@ -5,9 +5,10 @@ Usage:
     python analysis.py config/example_C_z05_thpq2.yaml [--output diag.pdf]
 
 Produces a multi-page PDF with:
-  Page 1  : Run weight distributions (signal + e⁺)
-  Page 2  : Coincidence-time distribution — full range + zoom on real peak
+  Page 1  : Coincidence-time distribution — full range + zoom on real peak
             with per-run window boundaries and cut regions shaded
+  Page 2  : Normalized yield vs run number, raw count comparisons,
+            and run weight distributions
   Page 3+ : Per-histogram background subtraction — real / random / e⁺
             overlaid, plus the final subtracted result
   Last    : Subtraction statistics table
@@ -95,49 +96,35 @@ def _make_summary_text(sub_results: list[SubtractionResult]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Page 1: weight distributions
+# Weight distributions
 # ---------------------------------------------------------------------------
 
-def _page_weights(pdf: PdfPages, result: PipelineResult) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-    fig.suptitle("Run weight distributions", fontsize=11, fontweight="bold")
+def _draw_weight_panel(ax, label: str, result: PipelineResult) -> None:
+    color = {"signal": "steelblue", "eplus": "tomato"}.get(label, "gray")
+    wt = result.weight_tables.get(label)
 
-    labels  = ["signal", "eplus"]
-    colors  = ["steelblue", "tomato"]
-    tables  = [result.weight_tables.get("signal"),
-               result.weight_tables.get("eplus")]
+    if wt is None or wt.n_valid == 0:
+        ax.set_visible(False)
+        return
 
-    for ax, label, color, wt in zip(axes, labels, colors, tables):
-        if wt is None or wt.n_valid == 0:
-            ax.set_visible(False)
-            continue
-        df_w = weight_table_to_df(wt.weights)
-        weights = df_w["weight"].values
-        ax.hist(weights, bins=20, color=color, edgecolor="white", alpha=0.85)
-        ax.set_xlabel("per-event weight  $w_r$")
-        ax.set_ylabel("runs")
-        ax.set_title(f"{label}  ({wt.n_valid} runs)")
-        ax.axvline(weights.mean(), color="black", ls="--", lw=1,
-                   label=f"mean = {weights.mean():.3e}")
-        ax.legend()
+    df_w = weight_table_to_df(wt.weights)
+    weights = df_w["weight"].values
+    ax.hist(weights, bins=20, color=color, edgecolor="white", alpha=0.85)
+    ax.set_xlabel("per-event weight  $w_r$")
+    ax.set_ylabel("runs")
+    ax.set_title(f"{label}  ({wt.n_valid} runs)")
+    ax.axvline(weights.mean(), color="black", ls="--", lw=1,
+               label=f"mean = {weights.mean():.3e}")
+    ax.legend()
 
-        if wt.n_excluded:
-            ax.text(0.98, 0.97, f"{wt.n_excluded} run(s) excluded",
-                    transform=ax.transAxes, ha="right", va="top",
-                    fontsize=7, color="crimson")
-
-    skips = {k: len(v) for k, v in result.file_skips.items() if v}
-    if skips:
-        note = "Files not found: " + ", ".join(f"{k}={n}" for k, n in skips.items())
-        fig.text(0.5, 0.01, note, ha="center", fontsize=7, color="crimson")
-
-    fig.tight_layout()
-    pdf.savefig(fig)
-    plt.close(fig)
+    if wt.n_excluded:
+        ax.text(0.98, 0.97, f"{wt.n_excluded} run(s) excluded",
+                transform=ax.transAxes, ha="right", va="top",
+                fontsize=7, color="crimson")
 
 
 # ---------------------------------------------------------------------------
-# Page 2: coincidence-time distribution
+# Page 1: coincidence-time distribution
 # ---------------------------------------------------------------------------
 
 def _page_ctime(pdf: PdfPages, result: PipelineResult) -> None:
@@ -347,12 +334,13 @@ def _plot_ctmean_vs_run(ax, result: PipelineResult) -> None:
 
 def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
     """
-    Two-row diagnostic page per active run type.
+    Three-row diagnostic page per active run type.
 
     Row 1 — normalized yield: workflow vs CSV normyield per run.
     Row 2 — raw event counts: workflow (n_real, n_random, n_rsc)
              vs CSV (coin, randoms, ransubcoin) per run.
              This row isolates where the discrepancy originates.
+    Row 3 — run weight distributions for signal and eplus.
 
     Flagged runs (|residual| > 2%) are marked with a red × on row 1.
     """
@@ -363,16 +351,15 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
         return
 
     n_cols = len(labels)
-    # 2 rows: top = normyield, bottom = raw counts
-    fig, all_axes = plt.subplots(2, n_cols,
-                                 figsize=(5.5 * n_cols, 8.5),
+    fig, all_axes = plt.subplots(3, n_cols,
+                                 figsize=(5.5 * n_cols, 12.0),
                                  sharey=False)
     # Ensure 2-D indexing even for a single column
     if n_cols == 1:
-        all_axes = [[all_axes[0]], [all_axes[1]]]
-    top_axes, bot_axes = all_axes[0], all_axes[1]
+        all_axes = [[all_axes[0]], [all_axes[1]], [all_axes[2]]]
+    top_axes, mid_axes, bot_axes = all_axes[0], all_axes[1], all_axes[2]
 
-    fig.suptitle("Normalized yield vs run number", fontsize=11, fontweight="bold")
+    fig.suptitle("Normalized yield, raw counts, and run weights", fontsize=11, fontweight="bold")
 
     run_colors = {"signal": "steelblue", "eplus": "tomato", "dummy": "darkorange"}
 
@@ -425,7 +412,7 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
             ax.legend(fontsize=7)
 
         # ── Row 2: raw count comparison ──────────────────────────────────────
-        ax2 = bot_axes[idx]
+        ax2 = mid_axes[idx]
 
         has_csv_counts = all(c in ny_df.columns for c in
                              ("csv_coin", "csv_randoms", "csv_ransubcoin"))
@@ -474,13 +461,24 @@ def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
         if idx == 0:
             ax2.legend(fontsize=6)
 
+    for ax, label in zip(bot_axes, labels):
+        if label in {"signal", "eplus"}:
+            _draw_weight_panel(ax, label, result)
+        else:
+            ax.set_visible(False)
+
+    skips = {k: len(v) for k, v in result.file_skips.items() if v}
+    if skips:
+        note = "Files not found: " + ", ".join(f"{k}={n}" for k, n in skips.items())
+        fig.text(0.5, 0.01, note, ha="center", fontsize=7, color="crimson")
+
     fig.tight_layout()
     pdf.savefig(fig)
     plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
-# Pages 4+: per-histogram subtraction overview
+# Pages 3+: per-histogram subtraction overview
 # ---------------------------------------------------------------------------
 
 def _page_histogram(
@@ -688,7 +686,6 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
     logger.info("Writing diagnostic PDF: %s", output_pdf)
     with PdfPages(output_pdf) as pdf:
 
-        _page_weights(pdf, result)
         _page_ctime(pdf, result)
         _page_normyield(pdf, result)
 
@@ -717,7 +714,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
         _page_statistics(pdf, result, sub_results)
 
     logger.info("Done → %s  (%d pages)", output_pdf,
-                len(cfg.histograms) + 4)
+                len(cfg.histograms) + 3)
 
 
 def main() -> None:
