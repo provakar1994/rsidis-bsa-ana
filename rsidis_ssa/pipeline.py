@@ -36,8 +36,10 @@ import boost_histogram as bh
 from rsidis_ssa.config_loader import AnalysisConfig, load_config
 from rsidis_ssa.cuts import (
     BRANCH_CTIME,
+    BRANCH_HELICITY,
     build_random_mask,
     build_real_mask,
+    effective_helicity,
     pid_mask as build_pid_mask,
 )
 from rsidis_ssa.histograms import build_histogram_registry, fill_run
@@ -122,7 +124,10 @@ class PipelineResult:
     normyield_per_run : dict[str, pd.DataFrame]
         Per-run normalized yield comparison table for each run type.
         Columns: run, n_real, n_random, normyield_workflow, normyield_csv,
-        residual_pct, flagged.
+        residual_pct, flagged, n_hplus, n_hminus, IHWP.
+    raw_helicity : dict[str, np.ndarray]
+        Concatenated raw T_helicity_hel values (real-window events, all runs)
+        per run type.  Keys are "signal", "eplus", "dummy" as applicable.
     cfg : AnalysisConfig
         The config used for this run.
     """
@@ -138,6 +143,7 @@ class PipelineResult:
     file_skips:        dict[str, list[int]]
     run_dfs:           dict[str, pd.DataFrame]
     normyield_per_run: dict[str, pd.DataFrame]
+    raw_helicity:      dict[str, np.ndarray]
     cfg:               AnalysisConfig
 
 
@@ -208,9 +214,11 @@ def _fill_run_type(
         computed from this workflow's own event selection.
     """
     branches = required_branches(cfg.histograms, cfg.cuts)
+    branches.add(BRANCH_HELICITY)   # always needed for per-run helicity diagnostics
     real_reg   = build_histogram_registry(cfg.histograms)
     random_reg = build_histogram_registry(cfg.histograms)
     ctime_hist = bh.Histogram(_CTIME_AXIS, storage=bh.storage.Double())
+    raw_helicity_values: list[np.ndarray] = []   # raw T_helicity_hel for all runs
     run_windows:        list[tuple[float, float]]       = []
     run_random_windows: list[list[tuple[float, float]]] = []
     file_skips:         list[int] = []
@@ -246,6 +254,12 @@ def _fill_run_type(
 
         real_mask   = build_real_mask(arrays, cfg.cuts, ctmean, ctsigma)
         random_mask = build_random_mask(arrays, cfg.cuts, float(ctmean), half_win, beam_bunch)
+
+        # Per-run helicity breakdown (real events only, after all PID+ctime cuts)
+        eff_hel  = effective_helicity(arrays, ihwp)
+        n_hplus  = int((real_mask & (eff_hel > 0.5)).sum())
+        n_hminus = int((real_mask & (eff_hel < -0.5)).sum())
+        raw_helicity_values.append(arrays[BRANCH_HELICITY][real_mask])
 
         # Absorb win_scale into the random fill weight so that
         # ``real − random`` is a valid subtraction without an extra factor.
@@ -290,6 +304,9 @@ def _fill_run_type(
             "n_rand_scaled":      n_rand_scaled,
             "n_rsc":              n_rsc,
             "normyield_workflow": n_rsc * rw.weight,
+            "n_hplus":            n_hplus,
+            "n_hminus":           n_hminus,
+            "IHWP":               ihwp,
             # Normalization component breakdown (from RunWeight)
             "charge":             rw.charge,
             "h_esing_eff":        rw.h_esing_eff,
@@ -353,7 +370,8 @@ def _fill_run_type(
 
     _log_normyield_table(ny_df, label)
 
-    return FilledRegistries(real=real_reg, random=random_reg), file_skips, ctime_hist, run_windows, run_random_windows, ny_df
+    raw_hel_all = np.concatenate(raw_helicity_values) if raw_helicity_values else np.array([], dtype=float)
+    return FilledRegistries(real=real_reg, random=random_reg), file_skips, ctime_hist, run_windows, run_random_windows, ny_df, raw_hel_all
 
 
 def _log_normyield_table(ny_df: pd.DataFrame, label: str) -> None:
@@ -572,11 +590,13 @@ def run_pipeline(
     ctime_random_run_windows: dict[str, list[list[tuple[float, float]]]] = {}
     run_dfs:                  dict[str, pd.DataFrame]                    = {}
     normyield_per_run:        dict[str, pd.DataFrame]                    = {}
+    raw_helicity:             dict[str, np.ndarray]                      = {}
 
     (signal_regs, signal_skips,
      ctime_hists["signal"], ctime_run_windows["signal"],
      ctime_random_run_windows["signal"],
-     normyield_per_run["signal"]) = (
+     normyield_per_run["signal"],
+     raw_helicity["signal"]) = (
         _fill_run_type(df_signal, weight_tables["signal"], cfg, "signal", beam_bunch, config_dir)
     )
     run_dfs["signal"] = df_signal
@@ -628,7 +648,8 @@ def run_pipeline(
             (eplus_regs, eplus_skips,
              ctime_hists["eplus"], ctime_run_windows["eplus"],
              ctime_random_run_windows["eplus"],
-             normyield_per_run["eplus"]) = (
+             normyield_per_run["eplus"],
+             raw_helicity["eplus"]) = (
                 _fill_run_type(df_eplus, weight_tables["eplus"], cfg, "eplus",
                                beam_bunch, config_dir, ctime_override=signal_ctime_override)
             )
@@ -646,7 +667,8 @@ def run_pipeline(
             (dummy_regs, dummy_skips,
              ctime_hists["dummy"], ctime_run_windows["dummy"],
              ctime_random_run_windows["dummy"],
-             normyield_per_run["dummy"]) = (
+             normyield_per_run["dummy"],
+             raw_helicity["dummy"]) = (
                 _fill_run_type(df_dummy, weight_tables["dummy"], cfg, "dummy",
                                beam_bunch, config_dir, ctime_override=signal_ctime_override)
             )
@@ -666,6 +688,7 @@ def run_pipeline(
         file_skips=file_skips,
         run_dfs=run_dfs,
         normyield_per_run=normyield_per_run,
+        raw_helicity=raw_helicity,
         cfg=cfg,
     )
 

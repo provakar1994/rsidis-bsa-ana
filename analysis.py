@@ -515,7 +515,117 @@ def _plot_ctmean_vs_run(ax, result: PipelineResult) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Page 3: normalized yield vs run number
+# Page 3: helicity & IHWP diagnostics
+# ---------------------------------------------------------------------------
+
+def _page_helicity(pdf: PdfPages, result: PipelineResult) -> None:
+    """
+    2×2 helicity diagnostic page (signal runs only):
+
+    Top-left  : raw T_helicity_hel distribution (two bars: +1 and −1)
+    Top-right : IHWP state (IN/OUT) vs run number
+    Bottom-left : h+ vs h− effective event counts per run (grouped bar)
+    Bottom-right: h+ / h− ratio per run with reference line at 1
+    """
+    ny = result.normyield_per_run.get("signal")
+    raw_hel = result.raw_helicity.get("signal")
+    if ny is None or ny.empty:
+        return
+
+    ny = ny.sort_values("run").reset_index(drop=True)
+    runs = ny["run"].astype(str).tolist()
+    x    = np.arange(len(ny))
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle("Helicity & IHWP diagnostics  (signal runs)", fontsize=11, fontweight="bold")
+    ax_rawh, ax_ihwp, ax_split, ax_ratio = axes.flat
+
+    # ── Top-left: raw helicity distribution ──────────────────────────────────
+    if raw_hel is not None and len(raw_hel) > 0:
+        unique_vals = np.unique(raw_hel)
+        counts      = [int((raw_hel == v).sum()) for v in unique_vals]
+        bar_colors  = ["steelblue" if v > 0 else "tomato" for v in unique_vals]
+        ax_rawh.bar([str(int(v)) for v in unique_vals], counts,
+                    color=bar_colors, edgecolor="black", linewidth=0.7)
+        for bar, cnt in zip(ax_rawh.patches, counts):
+            ax_rawh.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.01,
+                         f"{cnt:,}", ha="center", va="bottom", fontsize=9)
+        total = len(raw_hel)
+        ax_rawh.set_xlabel("T_helicity_hel (raw DAQ value)")
+        ax_rawh.set_ylabel("Events (real window, all runs)")
+        ax_rawh.set_title(f"Raw helicity distribution  (N = {total:,})")
+    else:
+        ax_rawh.text(0.5, 0.5, "No helicity data", transform=ax_rawh.transAxes,
+                     ha="center", va="center")
+        ax_rawh.set_title("Raw helicity distribution")
+
+    # ── Top-right: IHWP state vs run number ──────────────────────────────────
+    ihwp_vals  = ny["IHWP"].str.upper() if "IHWP" in ny.columns else pd.Series(["?"] * len(ny))
+    bar_colors = ["steelblue" if s == "OUT" else "tomato" for s in ihwp_vals]
+    ax_ihwp.bar(x, 1, color=bar_colors, edgecolor="black", linewidth=0.5, width=0.7)
+    ax_ihwp.set_xticks(x)
+    ax_ihwp.set_xticklabels(runs, rotation=45, ha="right", fontsize=7)
+    ax_ihwp.set_yticks([0.5])
+    ax_ihwp.set_yticklabels([""])
+    ax_ihwp.set_ylim(0, 1.3)
+    ax_ihwp.set_xlabel("Run number")
+    ax_ihwp.set_title("IHWP state per run")
+    legend_handles = [
+        plt.Rectangle((0, 0), 1, 1, color="steelblue", label="OUT"),
+        plt.Rectangle((0, 0), 1, 1, color="tomato",    label="IN"),
+    ]
+    ax_ihwp.legend(handles=legend_handles, fontsize=8, loc="upper right")
+    for xi, state in zip(x, ihwp_vals):
+        ax_ihwp.text(xi, 0.5, state, ha="center", va="center",
+                     fontsize=7, fontweight="bold", color="white")
+
+    # ── Bottom-left: h+ vs h− counts per run ─────────────────────────────────
+    if "n_hplus" in ny.columns and "n_hminus" in ny.columns:
+        ax_split.bar(x - 0.2, ny["n_hplus"],  0.4, label="h+",
+                     color="steelblue", edgecolor="black", linewidth=0.5)
+        ax_split.bar(x + 0.2, ny["n_hminus"], 0.4, label="h−",
+                     color="tomato",    edgecolor="black", linewidth=0.5)
+        ax_split.set_xticks(x)
+        ax_split.set_xticklabels(runs, rotation=45, ha="right", fontsize=7)
+        ax_split.set_ylabel("Events (real window)")
+        ax_split.set_title("Effective h+ / h− counts per run")
+        ax_split.legend(fontsize=8)
+    else:
+        ax_split.text(0.5, 0.5, "n_hplus/n_hminus not available",
+                      transform=ax_split.transAxes, ha="center", va="center")
+        ax_split.set_title("h+ / h− counts per run")
+
+    # ── Bottom-right: h+ / h− ratio per run ──────────────────────────────────
+    if "n_hplus" in ny.columns and "n_hminus" in ny.columns:
+        denom = ny["n_hminus"].replace(0, np.nan)
+        ratio = ny["n_hplus"] / denom
+        ax_ratio.axhline(1.0, color="gray", ls="--", lw=0.9, zorder=1)
+        ax_ratio.plot(x, ratio, "o-", color="purple", ms=6, lw=1.2, zorder=3)
+        ax_ratio.set_xticks(x)
+        ax_ratio.set_xticklabels(runs, rotation=45, ha="right", fontsize=7)
+        ax_ratio.set_ylabel("n_h+ / n_h−")
+        ax_ratio.set_title("Helicity balance per run")
+        # Annotate global ratio
+        n_hp_tot = int(ny["n_hplus"].sum())
+        n_hm_tot = int(ny["n_hminus"].sum())
+        global_ratio = n_hp_tot / n_hm_tot if n_hm_tot > 0 else float("nan")
+        ax_ratio.text(0.97, 0.97,
+                      f"Total h+ = {n_hp_tot:,}\nTotal h− = {n_hm_tot:,}\n"
+                      f"Global ratio = {global_ratio:.4f}",
+                      transform=ax_ratio.transAxes, va="top", ha="right",
+                      fontsize=8, family="monospace",
+                      bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
+    else:
+        ax_ratio.text(0.5, 0.5, "n_hplus/n_hminus not available",
+                      transform=ax_ratio.transAxes, ha="center", va="center")
+        ax_ratio.set_title("Helicity balance per run")
+
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+# Page 4: normalized yield vs run number
 # ---------------------------------------------------------------------------
 
 def _page_normyield(pdf: PdfPages, result: PipelineResult) -> None:
@@ -1003,6 +1113,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
     logger.info("Writing diagnostic PDF: %s", output_pdf)
     with PdfPages(output_pdf) as pdf:
 
+        _page_helicity(pdf, result)
         _page_ctime(pdf, result)
         _page_normyield(pdf, result)
 
@@ -1032,7 +1143,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
         _page_statistics(pdf, result, sub_results)
 
     logger.info("Done → %s  (%d pages)", output_pdf,
-                len(cfg.histograms) + 4)
+                len(cfg.histograms) + 5)
 
 
 def main() -> None:
