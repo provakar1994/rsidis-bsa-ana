@@ -151,6 +151,33 @@ class PipelineResult:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _apply_run_filter(
+    df: pd.DataFrame,
+    include: list[int] | None,
+    exclude: list[int],
+    label: str,
+) -> pd.DataFrame:
+    """
+    Apply runs_include / runs_exclude filters to a runlist DataFrame.
+
+    *include* = None means keep all runs.  *exclude* always wins over *include*.
+    Logs a summary of how many runs were dropped and why.
+    """
+    n_before = len(df)
+    if include is not None:
+        df = df[df["run"].isin(include)]
+    if exclude:
+        dropped_excl = df["run"][df["run"].isin(exclude)].tolist()
+        df = df[~df["run"].isin(exclude)]
+        if dropped_excl:
+            logger.info("[%s] runs_exclude removed %d run(s): %s",
+                        label, len(dropped_excl), dropped_excl)
+    n_after = len(df)
+    if n_before != n_after:
+        logger.info("[%s] run filter: %d → %d runs", label, n_before, n_after)
+    return df.reset_index(drop=True)
+
+
 def _real_half_win(row: pd.Series, cfg: AnalysisConfig) -> float:
     """Per-run real coincidence-time half-window in ns.
 
@@ -542,7 +569,10 @@ def run_pipeline(
     charge_column = cfg.normalization.charge_column
 
     # Signal (e⁻) runs
-    df_signal = get_signal_runs(df_setting)
+    df_signal = _apply_run_filter(
+        get_signal_runs(df_setting),
+        cfg.runs_include, cfg.runs_exclude, "signal",
+    )
     logger.info("Signal runs: %d", len(df_signal))
     weight_tables["signal"] = build_weight_table(
         df_signal,
@@ -552,7 +582,10 @@ def run_pipeline(
 
     # e⁺ background runs
     if cfg.do_eplus_subtraction:
-        df_eplus = get_eplus_runs(df_setting)
+        df_eplus = _apply_run_filter(
+            get_eplus_runs(df_setting),
+            cfg.runs_include, cfg.runs_exclude, "eplus",
+        )
         logger.info("e+ runs: %d", len(df_eplus))
         weight_tables["eplus"] = build_weight_table(
             df_eplus,
@@ -562,7 +595,10 @@ def run_pipeline(
 
     # Dummy runs
     if cfg.do_dummy_subtraction:
-        df_dummy = get_dummy_runs(df_all, setting)
+        df_dummy = _apply_run_filter(
+            get_dummy_runs(df_all, setting),
+            cfg.runs_include, cfg.runs_exclude, "dummy",
+        )
         logger.info("Dummy runs: %d", len(df_dummy))
         weight_tables["dummy"] = build_weight_table(
             df_dummy,

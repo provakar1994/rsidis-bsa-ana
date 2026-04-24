@@ -308,6 +308,8 @@ class AnalysisConfig(BaseModel):
     run_period:           str
     do_eplus_subtraction: bool = True
     do_dummy_subtraction: bool = False
+    runs_include:         list[int] | None = None   # None = all runs
+    runs_exclude:         list[int] = Field(default_factory=list)
     rootfiles:            RootfilesConfig
     runlist:              RunlistConfig
     normalization:        NormalizationConfig = Field(default_factory=NormalizationConfig)
@@ -338,6 +340,18 @@ class AnalysisConfig(BaseModel):
                 f"Duplicate histogram name(s): {dupes}.  "
                 "Each histogram must have a unique 'name'."
             )
+        return self
+
+    @model_validator(mode="after")
+    def runs_include_exclude_consistent(self) -> "AnalysisConfig":
+        if self.runs_include is not None and self.runs_exclude:
+            overlap = set(self.runs_include) & set(self.runs_exclude)
+            if overlap:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "runs_exclude supersedes runs_include for run(s): %s",
+                    sorted(overlap),
+                )
         return self
 
     # ---- convenience helpers ----

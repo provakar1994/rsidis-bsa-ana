@@ -26,6 +26,13 @@ do_eplus_subtraction: true
 # Subtract dummy target (only for LH2/LD2)?
 do_dummy_subtraction: false
 
+# ---- Run selection filter ----
+# runs_include: null means use all runs matching the kinematic setting.
+# Set to a list to restrict to specific run numbers: [25192, 25193]
+# runs_exclude always wins over runs_include.
+runs_include: null
+runs_exclude: []
+
 # ---- ROOT files ----
 rootfiles:
   directory:  ../data/rootfiles_pass0p1
