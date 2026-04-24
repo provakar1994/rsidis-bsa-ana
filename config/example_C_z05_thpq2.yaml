@@ -48,10 +48,8 @@ runlist:
 # boil_corr is applied only when do_dummy_subtraction is true AND
 # the target is a cryo target (LH2/LD2).
 normalization:
-  charge_column:     BCM2_Q
-  # apply_boil_corr is set automatically based on target; listed here
-  # for documentation only.
-  # apply_boil_corr: false   # <- set true for LH2/LD2 targets
+  charge_column:  BCM2_Q
+  weight_scheme:  eff_corrected_charge   # eff_corrected_counts | eff_corrected_charge
 
 # ---- Event selection cuts ----
 # These cuts are applied identically to signal (e⁻) and background (e⁺) runs.

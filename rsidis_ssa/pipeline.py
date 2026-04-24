@@ -290,10 +290,13 @@ def _fill_run_type(
 
         # Absorb win_scale into the random fill weight so that
         # ``real − random`` is a valid subtraction without an extra factor.
-        # Fill with eff_scale (charge-independent); histograms divided by Q_tot after loop.
-        random_weight = rw.eff_scale * win_scale
+        # eff_corrected_counts: fill with eff_scale; divide by Q_tot after loop.
+        # eff_corrected_charge: fill with 1 (raw counts); divide by Q_eff_tot after loop.
+        scheme = cfg.normalization.weight_scheme
+        fill_weight   = rw.eff_scale if scheme == "eff_corrected_counts" else 1.0
+        random_weight = fill_weight * win_scale
 
-        fill_run(arrays, real_mask,   rw.eff_scale,  real_reg,   cfg.histograms, ihwp)
+        fill_run(arrays, real_mask,   fill_weight,   real_reg,   cfg.histograms, ihwp)
         fill_run(arrays, random_mask, random_weight, random_reg, cfg.histograms, ihwp)
 
         # Ctime diagnostic: fill with PID-only mask, unweighted
@@ -353,21 +356,28 @@ def _fill_run_type(
     logger.info("[%s] filled %d runs (%d files missing)",
                 label, len(wt_result.weights) - len(file_skips), len(file_skips))
 
-    # Divide all histograms by Q_tot to get the correctly combined yield.
-    # boost_histogram h *= scale: values *= scale, variances *= scale^2,
-    # which gives sigma_j = sqrt(sum_r N_{rj} * eff_scale_r^2) / Q_tot.
-    q_tot = wt_result.Q_tot
-    if q_tot <= 0:
+    # Divide all histograms by the appropriate denominator to get the combined yield.
+    # eff_corrected_counts:  divide by Q_tot    (raw charge sum)
+    # eff_corrected_charge:  divide by Q_eff_tot (efficiency-corrected charge sum)
+    scheme = cfg.normalization.weight_scheme
+    if scheme == "eff_corrected_counts":
+        q_denom = wt_result.Q_tot
+        q_denom_label = f"Q_tot = {q_denom:.3f} mC"
+    else:
+        q_denom = wt_result.Q_eff_tot
+        q_denom_label = f"Q_eff_tot = {q_denom:.3f} mC"
+    if q_denom <= 0:
         raise ValueError(
-            f"[{label}] Q_tot = {q_tot:.4f} mC — no valid charge accumulated. "
+            f"[{label}] {q_denom_label} — no valid charge accumulated. "
             "Check that at least one run passed normalization validation."
         )
-    scale = 1.0 / q_tot
+    scale = 1.0 / q_denom
     for h in real_reg.values():
         h *= scale
     for h in random_reg.values():
         h *= scale
-    logger.debug("[%s] divided histograms by Q_tot = %.3f mC", label, q_tot)
+    logger.debug("[%s] divided histograms by %s  (scheme: %s)",
+                 label, q_denom_label, scheme)
 
     # Build normyield comparison DataFrame and merge in CSV normyield + raw counts
     ny_df = pd.DataFrame(run_normyields)

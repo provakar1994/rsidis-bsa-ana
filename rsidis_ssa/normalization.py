@@ -136,11 +136,18 @@ class WeightTableResult:
         Every run that was dropped, with the column and reason.
     Q_tot : float
         Sum of the configured charge-column values [mC] over all valid runs.
-        Used by the pipeline to divide histograms after filling with eff_scale.
+        Used by the ``eff_corrected_counts`` scheme (divide by Q_tot after
+        filling with eff_scale per event).
+    Q_eff_tot : float
+        Sum of efficiency-corrected charges [mC] over all valid runs:
+        ``Σ_r Q_r × h_e_r × p_h_r × lt_r / (ps_r × boil_r) = Σ_r norm_factor_r``.
+        Used by the ``eff_corrected_charge`` scheme (divide by Q_eff_tot after
+        filling with weight=1 per event).
     """
-    weights:  dict[int, RunWeight]     = field(default_factory=dict)
-    excluded: list[RunExclusion]       = field(default_factory=list)
-    Q_tot:    float                    = 0.0
+    weights:   dict[int, RunWeight]    = field(default_factory=dict)
+    excluded:  list[RunExclusion]      = field(default_factory=list)
+    Q_tot:     float                   = 0.0
+    Q_eff_tot: float                   = 0.0
 
     @property
     def n_valid(self) -> int:
@@ -352,7 +359,8 @@ def build_weight_table(
             result.excluded.append(excl)
             logger.warning("Excluded run %d (%s): %s", exc.run, exc.column, exc)
 
-    result.Q_tot = sum(rw.charge for rw in result.weights.values())
+    result.Q_tot     = sum(rw.charge       for rw in result.weights.values())
+    result.Q_eff_tot = sum(rw.norm_factor  for rw in result.weights.values())
 
     if result.excluded:
         logger.warning(
