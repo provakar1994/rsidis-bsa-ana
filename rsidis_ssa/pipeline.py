@@ -292,9 +292,12 @@ def _fill_run_type(
         # ``real − random`` is a valid subtraction without an extra factor.
         # eff_corrected_counts: fill with eff_scale; divide by Q_tot after loop.
         # eff_corrected_charge: fill with 1 (raw counts); divide by Q_eff_tot after loop.
+        # charge_only:          fill with 1 (raw counts); divide by Q_tot after loop.
+        #                       All efficiency factors are ignored — debugging only.
         scheme = cfg.normalization.weight_scheme
         fill_weight   = rw.eff_scale if scheme == "eff_corrected_counts" else 1.0
         random_weight = fill_weight * win_scale
+        # (charge_only also uses fill_weight=1.0; it differs only in the post-loop denominator)
 
         fill_run(arrays, real_mask,   fill_weight,   real_reg,   cfg.histograms, ihwp)
         fill_run(arrays, random_mask, random_weight, random_reg, cfg.histograms, ihwp)
@@ -357,10 +360,11 @@ def _fill_run_type(
                 label, len(wt_result.weights) - len(file_skips), len(file_skips))
 
     # Divide all histograms by the appropriate denominator to get the combined yield.
-    # eff_corrected_counts:  divide by Q_tot    (raw charge sum)
-    # eff_corrected_charge:  divide by Q_eff_tot (efficiency-corrected charge sum)
+    # eff_corrected_counts:  fill_w=eff_scale, divide by Q_tot    (raw charge sum)
+    # eff_corrected_charge:  fill_w=1,         divide by Q_eff_tot (efficiency-corrected charge)
+    # charge_only:           fill_w=1,         divide by Q_tot    (no efficiency correction)
     scheme = cfg.normalization.weight_scheme
-    if scheme == "eff_corrected_counts":
+    if scheme in ("eff_corrected_counts", "charge_only"):
         q_denom = wt_result.Q_tot
         q_denom_label = f"Q_tot = {q_denom:.3f} mC"
     else:

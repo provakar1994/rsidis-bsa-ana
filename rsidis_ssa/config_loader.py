@@ -119,7 +119,11 @@ class NormalizationConfig(BaseModel):
         "BCM2_Q", "BCM1_Q", "BCM4A_Q", "BCM4B_Q", "BCM4C_Q"
     ] = "BCM2_Q"
 
-    weight_scheme: Literal["eff_corrected_counts", "eff_corrected_charge"] = "eff_corrected_counts"
+    weight_scheme: Literal[
+        "eff_corrected_counts",
+        "eff_corrected_charge",
+        "charge_only",
+    ] = "eff_corrected_counts"
     """
     ``eff_corrected_counts`` (default):
         Fill each event with ``eff_scale_r = ps × boil / (h_e × p_h × lt)``.
@@ -131,6 +135,14 @@ class NormalizationConfig(BaseModel):
         Divide histograms by ``Q_eff_tot = Σ_r Q_r × h_e_r × p_h_r × lt_r / (ps_r × boil_r)``.
         Bin variance: ``Σ_r n_rk / Q_eff_tot²``  — pure Poisson, minimum variance.
         Equivalent to ``eff_corrected_counts`` when efficiencies are uniform across runs.
+
+    ``charge_only``:
+        Fill each event with weight 1 (raw counts).
+        Divide histograms by ``Q_tot = Σ Q_r`` (raw charge, no efficiency correction).
+        All efficiency factors (h_esing_eff, p_hadron_eff, livetime, boil_corr,
+        ps_factor) are ignored.  Useful for debugging: comparing this output
+        against ``eff_corrected_counts`` isolates the effect of the efficiency
+        corrections.
     """
 
 
