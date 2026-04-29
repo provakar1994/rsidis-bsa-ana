@@ -1030,6 +1030,58 @@ def _write_asymmetry_csv(path: Path, asym_results: list[AsymmetryResult]) -> Non
 _PARTICLE_LABEL = {"PI-SIDIS": "pi-", "PI+SIDIS": "pi+"}
 
 
+# ---------------------------------------------------------------------------
+# ROOT file export
+# ---------------------------------------------------------------------------
+
+def _write_root_file(
+    path: Path,
+    result: PipelineResult,
+    signal_after_random: dict[str, object],
+    signal_after_eplus:  dict[str, object],
+    dummy_subtracted:    dict[str, object],
+    final:               dict[str, object],
+) -> None:
+    """
+    Write all per-histogram yields to a ROOT file organised in subdirectories.
+
+    Directory structure
+    -------------------
+    signal/real/<hname>           raw signal real-window yield
+    signal/random/<hname>         raw signal random-window yield (scaled)
+    signal/after_random/<hname>   after random subtraction
+    signal/after_eplus/<hname>    after e⁺ subtraction  (only if e⁺ available)
+    eplus/real/<hname>            raw e⁺ real-window yield  (only if available)
+    eplus/random/<hname>          raw e⁺ random-window yield  (only if available)
+    dummy/real/<hname>            raw dummy real-window yield  (only if available)
+    dummy/random/<hname>          raw dummy after-random yield  (only if available)
+    final/<hname>                 fully background-subtracted yield
+    """
+    import uproot
+
+    cfg = result.cfg
+    with uproot.recreate(str(path)) as out:
+        for hcfg in cfg.histograms:
+            hname = hcfg.name
+
+            out[f"signal/real/{hname}"]          = result.signal.real[hname]
+            out[f"signal/random/{hname}"]         = result.signal.random[hname]
+            out[f"signal/after_random/{hname}"]   = signal_after_random[hname]
+
+            if result.eplus is not None:
+                out[f"signal/after_eplus/{hname}"] = signal_after_eplus[hname]
+                out[f"eplus/real/{hname}"]          = result.eplus.real[hname]
+                out[f"eplus/random/{hname}"]        = result.eplus.random[hname]
+
+            if result.dummy is not None:
+                out[f"dummy/real/{hname}"]    = result.dummy.real[hname]
+                out[f"dummy/random/{hname}"]  = dummy_subtracted[hname]
+
+            out[f"final/{hname}"] = final[hname]
+
+    logger.info("ROOT file → %s", path)
+
+
 def _write_kinematic_summary(
     path: Path,
     cfg,
@@ -1206,6 +1258,11 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
 
         asym_results = _page_asymmetry(pdf, result, final, config_dir=yaml_path.parent)
         _page_statistics(pdf, result, sub_results)
+
+    root_path = output_pdf.with_suffix(".root")
+    _write_root_file(root_path, result,
+                     signal_after_random, signal_after_eplus,
+                     dummy_subtracted, final)
 
     if asym_results:
         csv_path = output_pdf.with_name(output_pdf.stem + ".csv")
