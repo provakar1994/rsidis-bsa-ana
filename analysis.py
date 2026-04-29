@@ -1008,6 +1008,26 @@ def _page_asymmetry(
 
 
 # ---------------------------------------------------------------------------
+# Asymmetry CSV export
+# ---------------------------------------------------------------------------
+
+def _write_asymmetry_csv(path: Path, asym_results: list[AsymmetryResult]) -> None:
+    """Write phi bin centers, A_phys, and A_phys_err for all pairs to a CSV."""
+    rows = []
+    for ar in asym_results:
+        for phi, A, dA in zip(ar.phi_centers, ar.A_phys, ar.A_phys_err):
+            rows.append({
+                "histogram": ar.histogram_name,
+                "phi_center": phi,
+                "A_phys":     A,
+                "A_phys_err": dA,
+            })
+    df = pd.DataFrame(rows, columns=["histogram", "phi_center", "A_phys", "A_phys_err"])
+    df.to_csv(path, index=False)
+    logger.info("Asymmetry CSV → %s", path)
+
+
+# ---------------------------------------------------------------------------
 # Last page: statistics table
 # ---------------------------------------------------------------------------
 
@@ -1050,7 +1070,15 @@ def _page_statistics(
 # Main driver
 # ---------------------------------------------------------------------------
 
-def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
+def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None:
+    if output_pdf is None:
+        stem = yaml_path.stem
+        out_dir = Path("output") / stem
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output_pdf = out_dir / f"{stem}.pdf"
+    else:
+        output_pdf.parent.mkdir(parents=True, exist_ok=True)
+
     logger.info("Loading config: %s", yaml_path)
     result = run_pipeline_from_yaml(yaml_path)
     cfg    = result.cfg
@@ -1139,8 +1167,12 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path) -> None:
                 dummy_scale  = result.dummy_scale,
             )
 
-        _page_asymmetry(pdf, result, final, config_dir=yaml_path.parent)
+        asym_results = _page_asymmetry(pdf, result, final, config_dir=yaml_path.parent)
         _page_statistics(pdf, result, sub_results)
+
+    if asym_results:
+        csv_path = output_pdf.with_name(output_pdf.stem + ".csv")
+        _write_asymmetry_csv(csv_path, asym_results)
 
     logger.info("Done → %s  (%d pages)", output_pdf,
                 len(cfg.histograms) + 5)
@@ -1158,8 +1190,8 @@ def main() -> None:
     args = parser.parse_args()
 
     yaml_path  = args.config
-    output_pdf = args.output or yaml_path.with_suffix("").name + "_diagnostics.pdf"
-    make_diagnostic_pdf(yaml_path, Path(output_pdf))
+    output_pdf = Path(args.output) if args.output else None
+    make_diagnostic_pdf(yaml_path, output_pdf)
 
 
 if __name__ == "__main__":
