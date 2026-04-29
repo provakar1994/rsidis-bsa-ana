@@ -1027,6 +1027,43 @@ def _write_asymmetry_csv(path: Path, asym_results: list[AsymmetryResult]) -> Non
     logger.info("Asymmetry CSV → %s", path)
 
 
+_PARTICLE_LABEL = {"PI-SIDIS": "pi-", "PI+SIDIS": "pi+"}
+
+
+def _write_kinematic_summary(
+    path: Path,
+    cfg,
+    asym_results: list[AsymmetryResult],
+) -> None:
+    """Write one row per asymmetry result with kinematic metadata and fit values."""
+    try:
+        run_period = int(cfg.run_period.split("_")[-1])
+    except (ValueError, IndexError):
+        run_period = cfg.run_period
+
+    rows = []
+    for ar in asym_results:
+        rows.append({
+            #"run_period":    run_period,
+            "target":   cfg.target,
+            "particle": _PARTICLE_LABEL.get(cfg.setting.run_type, cfg.setting.run_type),
+            "ebeam":    cfg.setting.ebeam,
+            "x":        cfg.setting.x,
+            "q2":       cfg.setting.Q2,
+            "z":        cfg.setting.z,
+            "thpq":     cfg.setting.thpq,
+            "histogram": ar.histogram_name,
+            "asym":     ar.amplitude     if np.isfinite(ar.amplitude)     else np.nan,
+            "asym_err": ar.amplitude_err if np.isfinite(ar.amplitude_err) else np.nan,
+            "chi2_ndf": ar.chi2_ndf      if np.isfinite(ar.chi2_ndf)      else np.nan,
+            "n_bins":   ar.n_bins_used,
+        })
+    cols = ["target", "particle", "ebeam", "x", "q2", "z", "thpq",
+            "histogram", "asym", "asym_err", "chi2_ndf", "n_bins"]
+    pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
+    logger.info("Kinematic summary → %s", path)
+
+
 # ---------------------------------------------------------------------------
 # Last page: statistics table
 # ---------------------------------------------------------------------------
@@ -1173,6 +1210,8 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
     if asym_results:
         csv_path = output_pdf.with_name(output_pdf.stem + ".csv")
         _write_asymmetry_csv(csv_path, asym_results)
+        summary_path = output_pdf.with_name(output_pdf.stem + "_summary.csv")
+        _write_kinematic_summary(summary_path, cfg, asym_results)
 
     logger.info("Done → %s  (%d pages)", output_pdf,
                 len(cfg.histograms) + 5)

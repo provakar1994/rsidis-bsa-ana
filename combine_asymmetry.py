@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -34,6 +35,48 @@ from rsidis_ssa.asymmetry import fit_sinphi
 
 logging.basicConfig(level="INFO", format="%(levelname)-8s %(message)s")
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Kinematic stem parser
+# ---------------------------------------------------------------------------
+
+_STEM_RE = re.compile(
+    r"^(?P<target>[A-Za-z0-9]+)_"
+    r"(?P<particle>pi[mp])_"
+    r"e(?P<ebeam>[0-9mp]+)_"
+    r"x(?P<x>[0-9mp]+)_"
+    r"q2(?P<q2>[0-9mp]+)_"
+    r"z(?P<z>[0-9mp]+)_"
+    r"thpq(?P<thpq>[0-9mp]+)$"
+)
+_PARTICLE_LABEL = {"pim": "pi-", "pip": "pi+"}
+
+
+def _decode_float(s: str) -> float:
+    """Decode encoded float: 'p' → '.', 'm' → '-'."""
+    return float(s.replace("m", "-").replace("p", "."))
+
+
+def _parse_kinematic_stem(stem: str) -> dict | None:
+    """
+    Parse kinematic fields from a config filename stem.
+
+    Returns a dict with keys target, particle, ebeam, x, q2, z, thpq,
+    or None if the stem does not match the expected pattern.
+    """
+    m = _STEM_RE.match(stem)
+    if not m:
+        return None
+    return {
+        "target":   m.group("target"),
+        "particle": _PARTICLE_LABEL.get(m.group("particle"), m.group("particle")),
+        "ebeam":    _decode_float(m.group("ebeam")),
+        "x":        _decode_float(m.group("x")),
+        "q2":       _decode_float(m.group("q2")),
+        "z":        _decode_float(m.group("z")),
+        "thpq":     _decode_float(m.group("thpq")),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Combine
@@ -170,6 +213,59 @@ def write_plot(pdf_path: Path,
 
 
 # ---------------------------------------------------------------------------
+# Kinematic summary CSV
+# ---------------------------------------------------------------------------
+
+def _write_combined_summary(
+    path: Path,
+    combined: pd.DataFrame,
+    inputs: list[tuple[str, pd.DataFrame]],
+) -> None:
+    """
+    Write one row per histogram with kinematic metadata and combined fit values.
+
+    Kinematic fields (target, particle, ebeam, x, q2, z) are taken from the
+    first input stem that parses successfully — they should be identical across
+    all inputs.  thpq is recorded as a '|'-joined string of all unique values.
+    """
+    kin_list = [_parse_kinematic_stem(stem) for stem, _ in inputs]
+    first_kin = next((k for k in kin_list if k is not None), {})
+
+    thpq_vals = [str(k["thpq"]) for k in kin_list if k is not None]
+    thpq_str  = "|".join(dict.fromkeys(thpq_vals))   # unique, preserving order
+
+    if not first_kin:
+        logger.warning("Could not parse kinematics from any input stem — "
+                       "kinematic columns will be empty.")
+
+    rows = []
+    for hname, grp in combined.groupby("histogram", sort=True):
+        phi = grp["phi_center"].values
+        A   = grp["A_phys"].values
+        dA  = grp["A_phys_err"].values
+        amp, amp_err, chi2_ndf, n_used = fit_sinphi(phi, A, dA)
+        rows.append({
+            "target":    first_kin.get("target"),
+            "particle":  first_kin.get("particle"),
+            "ebeam":     first_kin.get("ebeam"),
+            "x":         first_kin.get("x"),
+            "q2":        first_kin.get("q2"),
+            "z":         first_kin.get("z"),
+            "thpq":      thpq_str,
+            "histogram": hname,
+            "asym":      amp      if np.isfinite(amp)      else np.nan,
+            "asym_err":  amp_err  if np.isfinite(amp_err)  else np.nan,
+            "chi2_ndf":  chi2_ndf if np.isfinite(chi2_ndf) else np.nan,
+            "n_bins":    n_used,
+        })
+
+    cols = ["target", "particle", "ebeam", "x", "q2", "z", "thpq",
+            "histogram", "asym", "asym_err", "chi2_ndf", "n_bins"]
+    pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
+    logger.info("Kinematic summary → %s", path)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -235,6 +331,17 @@ def main() -> None:
     pdf_path = out_stem.with_suffix(".pdf")
     write_plot(pdf_path, combined, inputs)
 
+    # Write kinematic summary
+    summary_path = out_stem.with_name(out_stem.name + "_summary.csv")
+    _write_combined_summary(summary_path, combined, inputs)
+
 
 if __name__ == "__main__":
     main()
+
+
+# Example usage:
+# python combine_asymmetry.py \                                                              
+#   output/C_pim_e10p7_x0p25_q23p3_z0p5_thpqm0p8/C_pim_e10p7_x0p25_q23p3_z0p5_thpqm0p8.csv \
+#   output/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0.csv \
+#   --output output/combined/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0AND0p8
