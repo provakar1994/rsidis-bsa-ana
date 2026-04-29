@@ -49,7 +49,7 @@ runlist:
 # the target is a cryo target (LH2/LD2).
 normalization:
   charge_column:  BCM2_Q
-  weight_scheme:  eff_corrected_charge   # eff_corrected_counts | eff_corrected_charge
+  weight_scheme:  charge_only   # eff_corrected_counts | eff_corrected_charge | charge_only
 
 # ---- Event selection cuts ----
 # These cuts are applied identically to signal (e⁻) and background (e⁺) runs.
