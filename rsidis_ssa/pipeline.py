@@ -240,10 +240,11 @@ def _fill_run_type(
         normyield_workflow = (n_real − n_random × win_scale) × weight_r,
         computed from this workflow's own event selection.
     """
-    branches = required_branches(cfg.histograms, cfg.cuts)
+    eff_histo_cfgs = cfg.effective_histograms()
+    branches = required_branches(eff_histo_cfgs, cfg.cuts)
     branches.add(BRANCH_HELICITY)   # always needed for per-run helicity diagnostics
-    real_reg   = build_histogram_registry(cfg.histograms)
-    random_reg = build_histogram_registry(cfg.histograms)
+    real_reg   = build_histogram_registry(eff_histo_cfgs)
+    random_reg = build_histogram_registry(eff_histo_cfgs)
     ctime_hist = bh.Histogram(_CTIME_AXIS, storage=bh.storage.Double())
     raw_helicity_values: list[np.ndarray] = []   # raw T_helicity_hel for all runs
     run_windows:        list[tuple[float, float]]       = []
@@ -299,8 +300,8 @@ def _fill_run_type(
         random_weight = fill_weight * win_scale
         # (charge_only also uses fill_weight=1.0; it differs only in the post-loop denominator)
 
-        fill_run(arrays, real_mask,   fill_weight,   real_reg,   cfg.histograms, ihwp)
-        fill_run(arrays, random_mask, random_weight, random_reg, cfg.histograms, ihwp)
+        fill_run(arrays, real_mask,   fill_weight,   real_reg,   eff_histo_cfgs, ihwp)
+        fill_run(arrays, random_mask, random_weight, random_reg, eff_histo_cfgs, ihwp)
 
         # Ctime diagnostic: fill with PID-only mask, unweighted
         p_mask = build_pid_mask(arrays, cfg.cuts)

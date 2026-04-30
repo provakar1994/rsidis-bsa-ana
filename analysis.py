@@ -1023,6 +1023,8 @@ def _page_asymmetry(
     result:     PipelineResult,
     final:      dict[str, object],
     config_dir: Path | None = None,
+    pairs:      list[tuple[str, str, str]] | None = None,
+    subtitle:   str | None = None,
 ) -> list[AsymmetryResult]:
     """
     Compute and plot the beam SSA (A_LU^sinφ) for every helicity-split pair.
@@ -1034,12 +1036,21 @@ def _page_asymmetry(
       - zero reference line  (gray dashed)
       - text box: fitted amplitude, uncertainty, χ²/ndf, P_beam
 
+    Parameters
+    ----------
+    pairs : list of (base, hplus_name, hminus_name) or None
+        If None, auto-detected from *final* keys via find_asymmetry_pairs().
+        Pass an explicit list to restrict to a specific subset of pairs.
+    subtitle : str or None
+        Optional second line added to the page suptitle (e.g. kinematic bin label).
+
     Returns the list of AsymmetryResult objects for use by the statistics page.
     Returns an empty list and skips the page when no pairs are found or
     beam_polarization is not configured.
     """
-    cfg   = result.cfg
-    pairs = find_asymmetry_pairs(list(final.keys()))
+    cfg = result.cfg
+    if pairs is None:
+        pairs = find_asymmetry_pairs(list(final.keys()))
     if not pairs:
         return []
 
@@ -1063,11 +1074,13 @@ def _page_asymmetry(
     if n_pairs == 1:
         axes_grid = axes_grid.reshape(1, 2)
 
-    fig.suptitle(
+    _title = (
         f"Beam SSA  —  $A_{{LU}}^{{\\sin\\phi}}$   "
-        f"($P_{{\\rm beam}} = {P_beam:.2f}$)",
-        fontsize=11, fontweight="bold",
+        f"($P_{{\\rm beam}} = {P_beam:.2f}$)"
     )
+    if subtitle:
+        _title += f"\n{subtitle}"
+    fig.suptitle(_title, fontsize=11, fontweight="bold")
 
     phi_fit = np.linspace(-np.pi, np.pi, 200)
 
@@ -1205,7 +1218,7 @@ def _write_root_file(
 
     cfg = result.cfg
     with uproot.recreate(str(path)) as out:
-        for hcfg in cfg.histograms:
+        for hcfg in cfg.effective_histograms():
             hname  = hcfg.name
             ndim   = "2D" if hcfg.is_2d else "1D"
 
@@ -1261,6 +1274,86 @@ def _write_kinematic_summary(
             "histogram", "asym", "asym_err", "chi2_ndf", "n_bins"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
     logger.info("Kinematic summary → %s", path)
+
+
+# ---------------------------------------------------------------------------
+# Binned asymmetry CSV and summary plot
+# ---------------------------------------------------------------------------
+
+def _write_binned_asymmetry_csv(
+    path:        Path,
+    bin_groups:  list[tuple[str, list[tuple[AsymmetryResult, float, float, float]]]],
+) -> None:
+    """
+    Write per-bin φ asymmetry to CSV.
+
+    Parameters
+    ----------
+    bin_groups
+        List of (variable_name, [(ar, lo, hi, center), ...]) — one entry per
+        histogram that has a bin_in block.  ``variable_name`` is the branch
+        name (e.g. 'pt'); lo/hi are the bin edges; center = (lo+hi)/2.
+    """
+    rows = []
+    for variable, bin_results in bin_groups:
+        for ar, lo, hi, center in bin_results:
+            for phi, A, dA in zip(ar.phi_centers, ar.A_phys, ar.A_phys_err):
+                rows.append({
+                    "variable":   variable,
+                    "hmin":       lo,
+                    "hmax":       hi,
+                    "bin_center": round(center, 3),
+                    "histogram":  ar.histogram_name,
+                    "phi_center": phi,
+                    "A_phys":     A,
+                    "A_phys_err": dA,
+                })
+    cols = ["variable", "hmin", "hmax", "bin_center",
+            "histogram", "phi_center", "A_phys", "A_phys_err"]
+    pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
+    logger.info("Binned asymmetry CSV → %s", path)
+
+
+def _page_binned_summary(
+    pdf:         PdfPages,
+    bin_results: list[tuple[AsymmetryResult, float, float, float]],
+    variable:    str,
+    histo_name:  str,
+) -> None:
+    """Plot A_LU^sinphi vs the binned kinematic variable with error bars."""
+    if not bin_results:
+        return
+
+    centers    = np.array([entry[3] for entry in bin_results])
+    amplitudes = np.array([entry[0].amplitude     for entry in bin_results])
+    amp_errs   = np.array([entry[0].amplitude_err for entry in bin_results])
+    lo_vals    = np.array([entry[1] for entry in bin_results])
+    hi_vals    = np.array([entry[2] for entry in bin_results])
+    xerr_lo    = centers - lo_vals
+    xerr_hi    = hi_vals - centers
+
+    valid = np.isfinite(amplitudes) & np.isfinite(amp_errs)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.axhline(0.0, color="gray", lw=0.9, ls="--", zorder=1)
+    if valid.any():
+        ax.errorbar(
+            centers[valid], amplitudes[valid],
+            yerr=amp_errs[valid],
+            xerr=[xerr_lo[valid], xerr_hi[valid]],
+            fmt="o", color="steelblue", ms=6, lw=1.2, capsize=4, zorder=3,
+            label=r"$A_{LU}^{\sin\phi}$",
+        )
+    ax.set_xlabel(variable)
+    ax.set_ylabel(r"$A_{LU}^{\sin\phi}$")
+    ax.set_title(
+        rf"$A_{{LU}}^{{\sin\phi}}$ vs {variable}  —  {histo_name}",
+        fontsize=11, fontweight="bold",
+    )
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -1327,7 +1420,8 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
     dummy_subtracted:    dict[str, object] = {}  # h_dum_ran per histogram
     final:               dict[str, object] = {}
 
-    for hname in cfg.histogram_names():
+    for _hcfg in cfg.effective_histograms():
+        hname = _hcfg.name
         h_sig_real   = result.signal.real[hname]
         h_sig_random = result.signal.random[hname]
 
@@ -1407,7 +1501,45 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
                 dummy_scale  = result.dummy_scale,
             )
 
-        asym_results = _page_asymmetry(pdf, result, final, config_dir=yaml_path.parent)
+        # Overall SSA page (pairs from original histograms only)
+        overall_names = {h.name for h in cfg.histograms}
+        overall_pairs = find_asymmetry_pairs([k for k in final if k in overall_names])
+        asym_results = _page_asymmetry(
+            pdf, result, final,
+            config_dir=yaml_path.parent,
+            pairs=overall_pairs,
+        )
+
+        # Per-bin SSA pages: one page per bin for each histogram with bin_in
+        # bin_groups collects (variable, [(ar, lo, hi, center), ...]) for CSV export
+        bin_groups: list[tuple[str, list[tuple[AsymmetryResult, float, float, float]]]] = []
+        for _hcfg_bin in cfg.histograms:
+            if _hcfg_bin.bin_in is None:
+                continue
+            _bin_in = _hcfg_bin.bin_in
+            _this_group: list[tuple[AsymmetryResult, float, float, float]] = []
+
+            for _i, (_lo, _hi) in enumerate(_bin_in.intervals()):
+                _base       = f"{_hcfg_bin.name}_{_bin_in.label(_i)}"
+                _hplus_name = f"{_base}_hplus"
+                _hminus_name = f"{_base}_hminus"
+                if _hplus_name not in final or _hminus_name not in final:
+                    continue
+                _subtitle = f"{_bin_in.branch} ∈ [{_lo:.3f}, {_hi:.3f})"
+                _bin_ars = _page_asymmetry(
+                    pdf, result, final,
+                    config_dir=yaml_path.parent,
+                    pairs=[(_base, _hplus_name, _hminus_name)],
+                    subtitle=_subtitle,
+                )
+                if _bin_ars:
+                    _center = 0.5 * (_lo + _hi)
+                    _this_group.append((_bin_ars[0], _lo, _hi, _center))
+
+            if _this_group:
+                _page_binned_summary(pdf, _this_group, _bin_in.branch, _hcfg_bin.name)
+                bin_groups.append((_bin_in.branch, _this_group))
+
         _page_statistics(pdf, result, sub_results)
 
     root_path = output_pdf.with_suffix(".root")
@@ -1420,6 +1552,10 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
         _write_asymmetry_csv(csv_path, asym_results)
         summary_path = output_pdf.with_name(output_pdf.stem + "_summary.csv")
         _write_kinematic_summary(summary_path, cfg, asym_results)
+
+    if bin_groups:
+        binned_csv_path = output_pdf.with_name(output_pdf.stem + "_binned.csv")
+        _write_binned_asymmetry_csv(binned_csv_path, bin_groups)
 
     logger.info("Done → %s  (%d pages)", output_pdf,
                 len(cfg.histograms) + 5)

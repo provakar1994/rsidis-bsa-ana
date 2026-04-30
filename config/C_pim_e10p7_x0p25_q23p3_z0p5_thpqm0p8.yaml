@@ -184,14 +184,14 @@ histograms:
   - name:     pt_vs_phi
     branch:   ptx
     bins:     50
-    xmin:     -1.0
-    xmax:     1.5
-    xlabel:   "P_{T}cos#phi (GeV/c)"
+    xmin:     -0.5
+    xmax:     0.5
+    xlabel:   "P_{T}cos(#phi_{pq}) (GeV/c)"
     branch_y: pty
     bins_y:   50
-    ymin:     -1.0
-    ymax:     1.0
-    ylabel:   "P_{T}sin#phi (GeV/c)"
+    ymin:     -0.5
+    ymax:     0.5
+    ylabel:   "P_{T}sin(#phi_{pq}) (GeV/c)"
 
   # Azimuthal angle (full + helicity-split)
   - name:   phipq

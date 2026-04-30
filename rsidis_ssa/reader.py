@@ -121,6 +121,10 @@ def required_branches(
                         "reader._COMPUTED_PREREQS."
                     )
 
+        # range_cut branch (from bin_in-expanded histograms)
+        if hcfg.range_cut is not None:
+            branches.add(hcfg.range_cut.branch)
+
     if any(h.helicity_cut is not None for h in histo_cfgs):
         branches.add(BRANCH_HELICITY)
 

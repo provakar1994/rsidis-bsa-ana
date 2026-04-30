@@ -168,6 +168,10 @@ def fill_run(
         elif hcfg.helicity_cut == "negative":
             mask = mask & (eff_hel < -0.5)  # type: ignore[operator]
 
+        if hcfg.range_cut is not None:
+            rc = hcfg.range_cut
+            mask = mask & (arrays[rc.branch] >= rc.lo) & (arrays[rc.branch] < rc.hi)
+
         if hcfg.is_2d:
             x_vals = _resolve_values(arrays, hcfg)[mask]
             y_vals = _resolve_y_values(arrays, hcfg)[mask]

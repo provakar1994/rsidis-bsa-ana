@@ -297,6 +297,45 @@ class CutsConfig(BaseModel):
         return self.ctime_real_window_fallback
 
 
+class BinInConfig(BaseModel):
+    """Kinematic binning applied to one histogram — generates per-bin hplus/hminus pairs."""
+    model_config = ConfigDict(extra="forbid")
+
+    branch: str
+    edges:  list[float] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def edges_strictly_increasing(self) -> "BinInConfig":
+        for i in range(len(self.edges) - 1):
+            if self.edges[i + 1] <= self.edges[i]:
+                raise ValueError(
+                    f"edges must be strictly increasing, got {self.edges}"
+                )
+        return self
+
+    @property
+    def n_bins(self) -> int:
+        return len(self.edges) - 1
+
+    def intervals(self) -> list[tuple[float, float]]:
+        return [(self.edges[i], self.edges[i + 1]) for i in range(self.n_bins)]
+
+    def bin_centers(self) -> list[float]:
+        return [0.5 * (self.edges[i] + self.edges[i + 1]) for i in range(self.n_bins)]
+
+    def label(self, i: int) -> str:
+        return f"{self.branch}bin{i}"
+
+
+class RangeCutConfig(BaseModel):
+    """Per-event kinematic range cut applied as lo ≤ branch < hi."""
+    model_config = ConfigDict(extra="forbid")
+
+    branch: str
+    lo:     float
+    hi:     float
+
+
 class HistogramConfig(BaseModel):
     """Definition of one 1-D or 2-D histogram."""
     model_config = ConfigDict(extra="forbid")
@@ -315,6 +354,11 @@ class HistogramConfig(BaseModel):
     ymin:     Optional[float] = None
     ymax:     Optional[float] = None
     ylabel:   str             = ""
+
+    # Kinematic binning — auto-generates per-bin hplus/hminus pairs at runtime
+    bin_in:    Optional[BinInConfig]    = None
+    # Internal: applied per-event in fill_run(); set by _expand_bin_in(), not in YAML
+    range_cut: Optional[RangeCutConfig] = None
 
     @field_validator("xmax")
     @classmethod
@@ -365,6 +409,38 @@ class HistogramConfig(BaseModel):
         if self.is_y_computed:
             return self.branch_y[len("__computed__"):]  # type: ignore[index]
         return None
+
+
+# ---------------------------------------------------------------------------
+# Bin-in expansion
+# ---------------------------------------------------------------------------
+
+def _expand_bin_in(hcfg: "HistogramConfig") -> list["HistogramConfig"]:
+    """
+    Generate per-bin helicity-split HistogramConfig entries for *hcfg*.
+
+    For a histogram named ``phipq`` with ``bin_in.branch = 'pt'`` and
+    3 bin intervals, this produces:
+        phipq_ptbin0_hplus,  phipq_ptbin0_hminus
+        phipq_ptbin1_hplus,  phipq_ptbin1_hminus
+        phipq_ptbin2_hplus,  phipq_ptbin2_hminus
+    Each carries a range_cut restricting events to its kinematic bin.
+    """
+    bin_in = hcfg.bin_in
+    result: list[HistogramConfig] = []
+    for i, (lo, hi) in enumerate(bin_in.intervals()):  # type: ignore[union-attr]
+        for hel_cut, suffix in [("positive", "_hplus"), ("negative", "_hminus")]:
+            result.append(HistogramConfig(
+                name      = f"{hcfg.name}_{bin_in.label(i)}{suffix}",  # type: ignore[union-attr]
+                branch    = hcfg.branch,
+                bins      = hcfg.bins,
+                xmin      = hcfg.xmin,
+                xmax      = hcfg.xmax,
+                xlabel    = hcfg.xlabel,
+                helicity_cut = hel_cut,  # type: ignore[arg-type]
+                range_cut = RangeCutConfig(branch=bin_in.branch, lo=lo, hi=hi),  # type: ignore[union-attr]
+            ))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +643,22 @@ class AnalysisConfig(BaseModel):
                 f"(period '{self.run_period}' of {constants_path})"
             )
         return val
+
+    def effective_histograms(self) -> list[HistogramConfig]:
+        """
+        Return the flat list of histograms to fill, including auto-generated
+        per-bin helicity-split pairs from any histogram that has a ``bin_in``
+        block.
+
+        Original histograms are always included first; their expanded variants
+        (one hplus + one hminus per bin interval) follow immediately after.
+        """
+        result: list[HistogramConfig] = []
+        for hcfg in self.histograms:
+            result.append(hcfg)
+            if hcfg.bin_in is not None:
+                result.extend(_expand_bin_in(hcfg))
+        return result
 
     def histogram_names(self) -> list[str]:
         return [h.name for h in self.histograms]
