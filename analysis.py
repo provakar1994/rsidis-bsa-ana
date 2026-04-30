@@ -883,6 +883,138 @@ def _page_histogram(
 
 
 # ---------------------------------------------------------------------------
+# 2-D histogram page
+# ---------------------------------------------------------------------------
+
+def _page_histogram_2d(
+    pdf:     "PdfPages",
+    hname:   str,
+    hcfg:    object,
+    h_final: object,
+) -> None:
+    """One figure for a 2-D histogram showing the final subtracted yield."""
+    h = h_final
+    x_edges = h.axes[0].edges      # type: ignore[attr-defined]
+    y_edges = h.axes[1].edges      # type: ignore[attr-defined]
+    values = h.values()             # type: ignore[attr-defined]  shape (bins_x, bins_y)
+
+    if hname == "pt_vs_phi":
+        _page_pt_vs_phi_2d(pdf, hname, hcfg, x_edges, y_edges, values)
+        return
+
+    fig, ax = plt.subplots(figsize=(7.0, 5.5))
+    fig.suptitle(f"Histogram: {hname}  [2D]", fontsize=11, fontweight="bold")
+
+    im = ax.pcolormesh(x_edges, y_edges, values.T, cmap="viridis", shading="auto")
+    fig.colorbar(im, ax=ax, label="yield  [a.u. / mC]")
+    ax.set_xlabel(getattr(hcfg, "xlabel", None) or hname)
+    ax.set_ylabel(getattr(hcfg, "ylabel", None) or getattr(hcfg, "branch_y", "y"))
+    ax.set_title(hname)
+
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+def _page_pt_vs_phi_2d(
+    pdf:      "PdfPages",
+    hname:    str,
+    hcfg:     object,
+    x_edges:  np.ndarray,
+    y_edges:  np.ndarray,
+    values:   np.ndarray,
+) -> None:
+    """Draw P_T vs phi in a polar-style Cartesian canvas."""
+    fig, ax = plt.subplots(figsize=(6.4, 5.1))
+    plot_values = values.T.copy()
+    plot_values[(plot_values == 0.0) | ~np.isfinite(plot_values)] = np.nan
+    cmap = plt.get_cmap("jet").copy()
+    cmap.set_bad("white")
+
+    im = ax.pcolormesh(
+        x_edges,
+        y_edges,
+        plot_values,
+        cmap=cmap,
+        shading="auto",
+        zorder=2,
+    )
+    im.set_rasterized(True)
+
+    xmin = float(getattr(hcfg, "xmin", np.min(x_edges)))
+    xmax = float(getattr(hcfg, "xmax", np.max(x_edges)))
+    ymin = float(getattr(hcfg, "ymin", np.min(y_edges)))
+    ymax = float(getattr(hcfg, "ymax", np.max(y_edges)))
+    r_frame = max(abs(xmin), abs(xmax), abs(ymin), abs(ymax))
+    xmin, xmax = -r_frame, r_frame
+    ymin, ymax = -r_frame, r_frame
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    ax.set_title("")
+    fig.suptitle("")
+
+    ax.axhline(0.0, color="0.55", lw=0.7, zorder=3)
+    ax.axvline(0.0, color="0.55", lw=0.7, zorder=3)
+
+    ring_values = np.arange(0.1, 0.92 * r_frame + 1.0e-9, 0.1)
+    for r in ring_values:
+        ax.add_patch(plt.Circle(
+            (0.0, 0.0),
+            r,
+            fill=False,
+            ec="red",
+            ls=":",
+            lw=0.85,
+            alpha=0.9,
+            zorder=4,
+        ))
+        label_angle = np.deg2rad(24.0)
+        if np.isclose((r * 10) % 2, 0.0):
+            ax.text(
+                r * np.cos(label_angle) + 0.015 * r_frame,
+                r * np.sin(label_angle) + 0.015 * r_frame,
+                rf"$P_T = {r:.1f}\ \mathrm{{GeV}}$",
+                color="red",
+                fontsize=8,
+                fontweight="bold",
+                ha="left",
+                va="center",
+                zorder=5,
+            )
+
+    ax.text(0.5, 1.02, r"$\phi_h = 90^\circ$", transform=ax.transAxes,
+            ha="center", va="bottom", fontsize=10, fontweight="bold")
+    ax.text(1.01, 0.5, r"$\phi_h = 0^\circ$", transform=ax.transAxes,
+            ha="left", va="center", fontsize=10)
+    ax.text(0.5, -0.02, r"$\phi_h = 270^\circ$", transform=ax.transAxes,
+            ha="center", va="top", fontsize=10)
+    ax.text(-0.01, 0.5, r"$\phi_h = 180^\circ$", transform=ax.transAxes,
+            ha="right", va="center", fontsize=10)
+
+    major = 0.2 if r_frame <= 1.1 else 0.5
+    minor = major / 4.0
+    ax.set_xticks(np.arange(np.ceil(xmin / major) * major, xmax + 0.5 * major, major))
+    ax.set_yticks(np.arange(np.ceil(ymin / major) * major, ymax + 0.5 * major, major))
+    ax.set_xticks(np.arange(np.ceil(xmin / minor) * minor, xmax + 0.5 * minor, minor), minor=True)
+    ax.set_yticks(np.arange(np.ceil(ymin / minor) * minor, ymax + 0.5 * minor, minor), minor=True)
+    ax.tick_params(which="major", direction="in", length=6, width=0.6,
+                   labelbottom=False, labelleft=False, labelright=False, labeltop=False)
+    ax.tick_params(which="minor", direction="in", length=3, width=0.4)
+
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.8)
+        spine.set_color("0.25")
+
+    fig.tight_layout(pad=1.7)
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Asymmetry page
 # ---------------------------------------------------------------------------
 
@@ -1074,7 +1206,8 @@ def _write_root_file(
     cfg = result.cfg
     with uproot.recreate(str(path)) as out:
         for hcfg in cfg.histograms:
-            hname = hcfg.name
+            hname  = hcfg.name
+            ndim   = "2D" if hcfg.is_2d else "1D"
 
             out[f"{hname}"]          = copy.deepcopy(final[hname])
             out[f"{hname}_sig_real"] = copy.deepcopy(result.signal.real[hname])
@@ -1089,6 +1222,9 @@ def _write_root_file(
             if result.dummy is not None:
                 out[f"{hname}_dum_real"] = copy.deepcopy(result.dummy.real[hname])
                 out[f"{hname}_dum_rsc"]  = copy.deepcopy(dummy_subtracted[hname])
+
+            logger.debug("  wrote %s  [%s]  sum=%.3g", hname, ndim,
+                         float(final[hname].values().sum()))
 
     logger.info("ROOT file → %s", path)
 
@@ -1247,6 +1383,10 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
 
         for hcfg in cfg.histograms:
             hname = hcfg.name
+            if hcfg.is_2d:
+                _page_histogram_2d(pdf, hname, hcfg, final[hname])
+                continue
+
             h_ep_real   = result.eplus.real[hname]   if result.eplus else None
             h_ep_random = result.eplus.random[hname] if result.eplus else None
             h_after_ep  = signal_after_eplus[hname]  if result.eplus else None
