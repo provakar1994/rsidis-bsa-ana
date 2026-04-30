@@ -1043,20 +1043,32 @@ def _write_root_file(
     final:               dict[str, object],
 ) -> None:
     """
-    Write all per-histogram yields to a ROOT file organised in subdirectories.
+    Write all per-histogram yields to a ROOT file with flat key names.
 
-    Directory structure
-    -------------------
-    signal/real/<hname>           raw signal real-window yield
-    signal/random/<hname>         raw signal random-window yield (scaled)
-    signal/after_random/<hname>   after random subtraction
-    signal/after_eplus/<hname>    after e⁺ subtraction  (only if e⁺ available)
-    eplus/real/<hname>            raw e⁺ real-window yield  (only if available)
-    eplus/random/<hname>          raw e⁺ random-window yield  (only if available)
-    dummy/real/<hname>            raw dummy real-window yield  (only if available)
-    dummy/random/<hname>          raw dummy after-random yield  (only if available)
-    final/<hname>                 fully background-subtracted yield
+    Naming convention  (<hname> = histogram name from config)
+    -----------------
+    <hname>                  fully background-subtracted yield  (= "final")
+    <hname>_sig_real         raw signal real-window yield
+    <hname>_sig_rand         raw signal random-window yield (scaled)
+    <hname>_sig_rsc          signal after random subtraction
+    <hname>_sig_ep           signal after e⁺ subtraction       (if e⁺ enabled)
+    <hname>_ep_real          raw e⁺ real-window yield           (if e⁺ enabled)
+    <hname>_ep_rand          raw e⁺ random-window yield         (if e⁺ enabled)
+    <hname>_dum_real         raw dummy real-window yield        (if dummy enabled)
+    <hname>_dum_rsc          dummy after random subtraction     (if dummy enabled)
+
+    Flat keys are required so that uproot sets each TH1's internal ROOT name
+    (fName) equal to the full key string.  With subdirectory keys uproot sets
+    fName to only the last path component, causing all same-named histograms
+    in different directories to share a single ROOT name — ROOT's gDirectory
+    then collapses them to one object in memory, breaking Draw("SAME").
+
+    Each histogram is deep-copied before writing to ensure independent numpy
+    storage: several intermediate histograms share the same Python object
+    (e.g. final == signal_after_eplus when dummy subtraction is disabled),
+    and without copying they map to the same underlying numpy arrays.
     """
+    import copy
     import uproot
 
     cfg = result.cfg
@@ -1064,20 +1076,19 @@ def _write_root_file(
         for hcfg in cfg.histograms:
             hname = hcfg.name
 
-            out[f"signal/real/{hname}"]          = result.signal.real[hname]
-            out[f"signal/random/{hname}"]         = result.signal.random[hname]
-            out[f"signal/after_random/{hname}"]   = signal_after_random[hname]
+            out[f"{hname}"]          = copy.deepcopy(final[hname])
+            out[f"{hname}_sig_real"] = copy.deepcopy(result.signal.real[hname])
+            out[f"{hname}_sig_rand"] = copy.deepcopy(result.signal.random[hname])
+            out[f"{hname}_sig_rsc"]  = copy.deepcopy(signal_after_random[hname])
 
             if result.eplus is not None:
-                out[f"signal/after_eplus/{hname}"] = signal_after_eplus[hname]
-                out[f"eplus/real/{hname}"]          = result.eplus.real[hname]
-                out[f"eplus/random/{hname}"]        = result.eplus.random[hname]
+                out[f"{hname}_sig_ep"]  = copy.deepcopy(signal_after_eplus[hname])
+                out[f"{hname}_ep_real"] = copy.deepcopy(result.eplus.real[hname])
+                out[f"{hname}_ep_rand"] = copy.deepcopy(result.eplus.random[hname])
 
             if result.dummy is not None:
-                out[f"dummy/real/{hname}"]    = result.dummy.real[hname]
-                out[f"dummy/random/{hname}"]  = dummy_subtracted[hname]
-
-            out[f"final/{hname}"] = final[hname]
+                out[f"{hname}_dum_real"] = copy.deepcopy(result.dummy.real[hname])
+                out[f"{hname}_dum_rsc"]  = copy.deepcopy(dummy_subtracted[hname])
 
     logger.info("ROOT file → %s", path)
 
