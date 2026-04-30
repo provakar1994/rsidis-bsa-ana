@@ -6,6 +6,7 @@ Design
 ``build_histogram_registry(histo_cfgs)``
     Creates one boost_histogram per HistogramConfig entry (from the YAML).
     All histograms use the Weight storage so errors can be propagated.
+    1-D histograms have one Regular axis; 2-D histograms have two.
     Adding a new histogram requires only a new YAML block — no code changes.
 
 ``fill_run(arrays, cut_mask, weight, registry, histo_cfgs, ihwp)``
@@ -13,6 +14,7 @@ Design
     - Direct branches (read straight from the ROOT tree)
     - Computed quantities (zhad, Pt — delegated to cuts.compute_*)
     - Helicity-split histograms (helicity_cut: positive / negative)
+    - 2-D histograms (branch_y set in config)
 
 Usage
 -----
@@ -59,13 +61,20 @@ def build_histogram_registry(
     dict[str, bh.Histogram]
         Keys are histogram names; values are freshly-zeroed histograms.
     """
-    return {
-        hcfg.name: bh.Histogram(
-            bh.axis.Regular(hcfg.bins, hcfg.xmin, hcfg.xmax),
-            storage=bh.storage.Weight(),
-        )
-        for hcfg in histo_cfgs
-    }
+    registry: dict[str, bh.Histogram] = {}
+    for hcfg in histo_cfgs:
+        if hcfg.is_2d:
+            registry[hcfg.name] = bh.Histogram(
+                bh.axis.Regular(hcfg.bins,   hcfg.xmin, hcfg.xmax),
+                bh.axis.Regular(hcfg.bins_y, hcfg.ymin, hcfg.ymax),  # type: ignore[arg-type]
+                storage=bh.storage.Weight(),
+            )
+        else:
+            registry[hcfg.name] = bh.Histogram(
+                bh.axis.Regular(hcfg.bins, hcfg.xmin, hcfg.xmax),
+                storage=bh.storage.Weight(),
+            )
+    return registry
 
 
 # ---------------------------------------------------------------------------
@@ -76,20 +85,9 @@ def _resolve_values(
     arrays: dict[str, np.ndarray],
     hcfg: HistogramConfig,
 ) -> np.ndarray:
-    """
-    Return the per-event values to fill for *hcfg*.
-
-    Direct branches are looked up in *arrays* by name.
-    Computed quantities are evaluated on the fly.
-
-    Raises
-    ------
-    ValueError
-        If an unrecognised computed-quantity name is encountered.
-    """
+    """Return per-event x-axis values for *hcfg*."""
     if not hcfg.is_computed:
         return arrays[hcfg.branch]
-
     cname = hcfg.computed_name
     if cname == "zhad":
         return compute_zhad(arrays)
@@ -98,6 +96,24 @@ def _resolve_values(
     raise ValueError(
         f"Unknown computed quantity: {cname!r}.  "
         "Register it in histograms._resolve_values() and cuts.py."
+    )
+
+
+def _resolve_y_values(
+    arrays: dict[str, np.ndarray],
+    hcfg: HistogramConfig,
+) -> np.ndarray:
+    """Return per-event y-axis values for a 2-D *hcfg*."""
+    if not hcfg.is_y_computed:
+        return arrays[hcfg.branch_y]  # type: ignore[index]
+    cname = hcfg.computed_y_name
+    if cname == "zhad":
+        return compute_zhad(arrays)
+    if cname == "Pt":
+        return compute_Pt(arrays)
+    raise ValueError(
+        f"Unknown computed y-quantity: {cname!r}.  "
+        "Register it in histograms._resolve_y_values() and cuts.py."
     )
 
 
@@ -152,5 +168,10 @@ def fill_run(
         elif hcfg.helicity_cut == "negative":
             mask = mask & (eff_hel < -0.5)  # type: ignore[operator]
 
-        values = _resolve_values(arrays, hcfg)[mask]
-        registry[hcfg.name].fill(values, weight=weight)
+        if hcfg.is_2d:
+            x_vals = _resolve_values(arrays, hcfg)[mask]
+            y_vals = _resolve_y_values(arrays, hcfg)[mask]
+            registry[hcfg.name].fill(x_vals, y_vals, weight=weight)
+        else:
+            values = _resolve_values(arrays, hcfg)[mask]
+            registry[hcfg.name].fill(values, weight=weight)

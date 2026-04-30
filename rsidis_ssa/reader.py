@@ -92,6 +92,7 @@ def required_branches(
     branches: set[str] = set(_PID_AND_CTIME_BRANCHES)
 
     for hcfg in histo_cfgs:
+        # x-axis
         if not hcfg.is_computed:
             branches.add(hcfg.branch)
         else:
@@ -104,6 +105,21 @@ def required_branches(
                     f"'{hcfg.name}'.  Register its prerequisites in "
                     "reader._COMPUTED_PREREQS."
                 )
+
+        # y-axis (2D histograms only)
+        if hcfg.is_2d:
+            if not hcfg.is_y_computed:
+                branches.add(hcfg.branch_y)  # type: ignore[arg-type]
+            else:
+                cname_y = hcfg.computed_y_name
+                if cname_y in _COMPUTED_PREREQS:
+                    branches |= _COMPUTED_PREREQS[cname_y]
+                else:
+                    raise ValueError(
+                        f"Unknown computed y-quantity {cname_y!r} in histogram "
+                        f"'{hcfg.name}'.  Register its prerequisites in "
+                        "reader._COMPUTED_PREREQS."
+                    )
 
     if any(h.helicity_cut is not None for h in histo_cfgs):
         branches.add(BRANCH_HELICITY)

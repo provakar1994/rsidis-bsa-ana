@@ -11,8 +11,8 @@ Usage
     setting = cfg.to_setting()
     rootfile_path = cfg.rootfiles.get_path(run_number)
 
-Adding a histogram
-------------------
+Adding a 1-D histogram
+----------------------
 Add one block under 'histograms:' in the YAML — no code changes needed:
 
     - name:   my_new_var
@@ -21,6 +21,22 @@ Add one block under 'histograms:' in the YAML — no code changes needed:
       xmin:   0.0
       xmax:   1.0
       xlabel: "My label"
+
+Adding a 2-D histogram
+----------------------
+Set branch_y (and bins_y / ymin / ymax) to create a TH2-style histogram:
+
+    - name:     zhad_vs_pt
+      branch:   __computed__zhad
+      bins:     45
+      xmin:     0.1
+      xmax:     1.0
+      xlabel:   "z_{had}"
+      branch_y: __computed__Pt
+      bins_y:   50
+      ymin:     0.0
+      ymax:     0.5
+      ylabel:   "P_{T} (GeV/c)"
 
 Computed quantities (not a direct ROOT branch) use the __computed__ prefix:
 
@@ -282,7 +298,7 @@ class CutsConfig(BaseModel):
 
 
 class HistogramConfig(BaseModel):
-    """Definition of one 1-D histogram."""
+    """Definition of one 1-D or 2-D histogram."""
     model_config = ConfigDict(extra="forbid")
 
     name:         str
@@ -293,6 +309,13 @@ class HistogramConfig(BaseModel):
     xlabel:       str   = ""
     helicity_cut: Optional[Literal["positive", "negative"]] = None
 
+    # 2D fields — set branch_y to enable a 2D histogram
+    branch_y: Optional[str]   = None
+    bins_y:   Optional[int]   = Field(default=None, gt=0)
+    ymin:     Optional[float] = None
+    ymax:     Optional[float] = None
+    ylabel:   str             = ""
+
     @field_validator("xmax")
     @classmethod
     def xmax_gt_xmin(cls, v: float, info) -> float:
@@ -301,19 +324,46 @@ class HistogramConfig(BaseModel):
             raise ValueError(f"xmax ({v}) must be > xmin ({xmin})")
         return v
 
+    @model_validator(mode="after")
+    def check_2d_fields(self) -> "HistogramConfig":
+        if self.branch_y is not None:
+            missing = [f for f in ("bins_y", "ymin", "ymax") if getattr(self, f) is None]
+            if missing:
+                raise ValueError(
+                    f"2D histogram '{self.name}' requires fields: {missing}"
+                )
+            if self.ymax <= self.ymin:  # type: ignore[operator]
+                raise ValueError(
+                    f"ymax ({self.ymax}) must be > ymin ({self.ymin})"
+                )
+        return self
+
+    @property
+    def is_2d(self) -> bool:
+        return self.branch_y is not None
+
     @property
     def is_computed(self) -> bool:
-        """True when the quantity must be calculated, not read directly from the tree."""
+        """True when the x-axis quantity must be calculated, not read from the tree."""
         return self.branch.startswith("__computed__")
 
     @property
     def computed_name(self) -> Optional[str]:
-        """
-        The name of the computed quantity (e.g. 'zhad'), or None for direct branches.
-        Used by the filling code to dispatch to the right computation function.
-        """
+        """The name of the computed x-axis quantity, or None for direct branches."""
         if self.is_computed:
             return self.branch[len("__computed__"):]
+        return None
+
+    @property
+    def is_y_computed(self) -> bool:
+        """True when the y-axis quantity must be calculated."""
+        return self.branch_y is not None and self.branch_y.startswith("__computed__")
+
+    @property
+    def computed_y_name(self) -> Optional[str]:
+        """The name of the computed y-axis quantity, or None."""
+        if self.is_y_computed:
+            return self.branch_y[len("__computed__"):]  # type: ignore[index]
         return None
 
 
