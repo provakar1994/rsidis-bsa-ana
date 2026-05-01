@@ -272,11 +272,11 @@ def _draw_phi_panels(
     else:
         info = "fit: insufficient bins"
         info_short = info
-    _text_kw = dict(va="top", ha="right", fontsize=7, family="monospace",
+    _text_kw = dict(va="top", ha="right", fontsize=9, family="monospace",
                     zorder=10,
                     bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
     ax_full.text(0.97, 0.97, info,       transform=ax_full.transAxes, **_text_kw)
-    ax_zoom.text(0.97, 0.97, info_short, transform=ax_zoom.transAxes, **_text_kw)
+    ax_zoom.text(0.36, 0.97, info_short, transform=ax_zoom.transAxes, **_text_kw)
 
 
 # ---------------------------------------------------------------------------

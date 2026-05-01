@@ -1104,7 +1104,7 @@ def _page_asymmetry(
         ax_full = axes_grid[row, 0]
         ax_zoom = axes_grid[row, 1]
 
-        _text_kw = dict(va="top", ha="right", fontsize=7, family="monospace",
+        _text_kw = dict(va="top", ha="right", fontsize=9, family="monospace",
                         zorder=10,
                         bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
 
@@ -1151,7 +1151,7 @@ def _page_asymmetry(
         ax_zoom.set_ylabel(r"$A_{LU}$")
         ax_zoom.set_ylim(ZOOM_LO, ZOOM_HI)
         ax_zoom.set_title(f"{base}  [zoom: {ZOOM_LO}, {ZOOM_HI}]", fontsize=9)
-        ax_zoom.text(0.97, 0.97, info_short, transform=ax_zoom.transAxes, **_text_kw)
+        ax_zoom.text(0.36, 0.97, info_short, transform=ax_zoom.transAxes, **_text_kw)
 
         logger.info(
             "Asymmetry [%s]  A_LU^sinphi = %+.4f ± %.4f  chi2/ndf = %.2f  "
