@@ -1,8 +1,20 @@
 """
 Combine asymmetry CSVs via inverse-variance weighted averaging and re-fit.
 
-Usage:
-    python combine_asymmetry.py file1.csv file2.csv ... [--output PATH] [--label LABEL]
+Two run modes
+-------------
+Direct mode — list CSV files explicitly:
+
+    python combine_asymmetry.py file1.csv file2.csv ... [--output PATH]
+
+Config mode — locate CSVs automatically from a base YAML + thpq values:
+
+    python combine_asymmetry.py \\
+        --base_config config/C_pim_e10p7_x0p25_q23p3_z0p5_base.yaml \\
+        --thpq -0.8 2.0 [--is_binned] [--output PATH]
+
+    Looks up output/<stem>/<stem>[_binned].csv for each thpq.
+    Default output: output/combined/<setting>_thpq<t1>AND<t2>[_binned].
 
 Accepts both overall and binned asymmetry CSVs produced by analysis.py.
 Format is auto-detected from column names:
@@ -11,17 +23,13 @@ Format is auto-detected from column names:
   Binned   (columns: variable, hmin, hmax, bin_center, histogram, phi_center,
                      A_phys, A_phys_err)
 
-Overall mode writes:
+Outputs
+-------
   <output>.csv         — combined bin values (same format as input)
   <output>.pdf         — individual + combined points with fit overlay
-  <output>_summary.csv — one row per histogram with fit amplitude
+  <output>_summary.csv — one row per histogram (overall) or per
+                         (variable, hmin, hmax, histogram) (binned) with fit amplitude
 
-Binned mode writes:
-  <output>.csv         — combined bin values (same format as input)
-  <output>.pdf         — per-kinematic-bin φ pages + A_LU vs variable summary pages
-  <output>_summary.csv — one row per (variable, hmin, hmax, histogram) with fit amplitude
-
-If --output is omitted, outputs go to "combined_asymmetry.*".
 All inputs must be the same format; mixing overall and binned raises an error.
 """
 
@@ -66,6 +74,14 @@ def _decode_float(s: str) -> float:
     return float(s.replace("m", "-").replace("p", "."))
 
 
+def _encode_float(v: float) -> str:
+    """Encode float to filename format: '.' → 'p', '-' → 'm'.  E.g. -0.8 → 'm0p8'."""
+    s = f"{v:g}"
+    if "." not in s:
+        s += ".0"
+    return s.replace("-", "m").replace(".", "p")
+
+
 def _parse_kinematic_stem(stem: str) -> dict | None:
     """
     Parse kinematic fields from a config filename stem.
@@ -87,6 +103,47 @@ def _parse_kinematic_stem(stem: str) -> dict | None:
         "z":        _decode_float(m.group("z")),
         "thpq":     _decode_float(m.group("thpq")),
     }
+
+
+def _build_inputs_from_config(
+    base_config: Path,
+    thpq_vals:   list[float],
+    is_binned:   bool,
+) -> tuple[list[tuple[str, pd.DataFrame]], Path]:
+    """
+    Discover CSV files from a base YAML config + thpq values.
+
+    Expects analysis.py output in:
+        output/<stem>/<stem>.csv          (overall)
+        output/<stem>/<stem>_binned.csv   (binned)
+
+    where <stem> = <base_config_stem_without_base>_thpq<encoded_thpq>.
+
+    Returns (inputs, default_output_stem).
+    """
+    setting_stem = re.sub(r"_base$", "", base_config.stem)
+    thpq_vals    = sorted(thpq_vals)
+    inputs: list[tuple[str, pd.DataFrame]] = []
+    for thpq in thpq_vals:
+        stem     = f"{setting_stem}_thpq{_encode_float(thpq)}"
+        suffix   = "_binned" if is_binned else ""
+        csv_path = Path("output") / stem / f"{stem}{suffix}.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(
+                f"CSV not found: {csv_path}\n"
+                f"  (expected analysis.py output for thpq={thpq})"
+            )
+        df = pd.read_csv(csv_path)
+        for col in ("histogram", "phi_center", "A_phys", "A_phys_err"):
+            if col not in df.columns:
+                raise ValueError(f"Missing column '{col}' in {csv_path}")
+        inputs.append((stem, df))
+        logger.info("Loaded %d rows from %s", len(df), csv_path)
+
+    thpq_str    = "AND".join(_encode_float(t) for t in thpq_vals)
+    out_suffix  = "_binned" if is_binned else ""
+    default_out = Path("output") / "combined" / f"{setting_stem}_thpq{thpq_str}{out_suffix}"
+    return inputs, default_out
 
 
 def _kin_header(inputs: list[tuple[str, pd.DataFrame]]) -> tuple[dict, str]:
@@ -546,44 +603,66 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Combine asymmetry CSVs via inverse-variance weighting"
     )
-    parser.add_argument("csvfiles", nargs="+", type=Path,
-                        help="Input asymmetry CSV files (>=2 recommended)")
+    parser.add_argument("csvfiles", nargs="*", type=Path,
+                        help="Input asymmetry CSV files (alternative to --base_config)")
     parser.add_argument("--output", "-o", type=Path, default=None,
-                        help="Output path stem (default: combined_asymmetry)")
+                        help="Output path stem (auto-generated when using --base_config)")
     parser.add_argument("--label", "-l", type=str, default=None,
                         help="Override label used in plot title")
+    parser.add_argument("--base_config", type=Path, default=None,
+                        help="Base YAML config; use with --thpq to locate CSVs automatically")
+    parser.add_argument("--thpq", nargs="+", type=float, default=None,
+                        help="thpq values to combine (required with --base_config)")
+    parser.add_argument("--is_binned", action="store_true",
+                        help="Use _binned.csv files (used with --base_config)")
     args = parser.parse_args()
 
-    if len(args.csvfiles) < 2:
-        logger.warning("Only one input CSV — combined result equals input.")
+    # ── Input resolution ─────────────────────────────────────────────────────
+    if args.base_config and args.csvfiles:
+        parser.error("Provide either CSV files or --base_config, not both.")
+    if not args.base_config and not args.csvfiles:
+        parser.error("Provide CSV files or use --base_config with --thpq.")
+    if args.base_config and not args.thpq:
+        parser.error("--thpq is required when using --base_config.")
 
-    # ── Load inputs ──────────────────────────────────────────────────────────
-    inputs: list[tuple[str, pd.DataFrame]] = []
-    for path in args.csvfiles:
-        if not path.exists():
-            logger.error("File not found: %s", path)
+    if args.base_config:
+        try:
+            inputs, auto_out = _build_inputs_from_config(
+                args.base_config, args.thpq, args.is_binned
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            logger.error("%s", exc)
             sys.exit(1)
-        df = pd.read_csv(path)
-        for col in ("histogram", "phi_center", "A_phys", "A_phys_err"):
-            if col not in df.columns:
-                logger.error("Missing column '%s' in %s", col, path)
+        binned_mode = args.is_binned
+        out_stem    = args.output or auto_out
+    else:
+        inputs: list[tuple[str, pd.DataFrame]] = []
+        for path in args.csvfiles:
+            if not path.exists():
+                logger.error("File not found: %s", path)
                 sys.exit(1)
-        inputs.append((path.stem, df))
-        logger.info("Loaded %d rows from %s", len(df), path)
+            df = pd.read_csv(path)
+            for col in ("histogram", "phi_center", "A_phys", "A_phys_err"):
+                if col not in df.columns:
+                    logger.error("Missing column '%s' in %s", col, path)
+                    sys.exit(1)
+            inputs.append((path.stem, df))
+            logger.info("Loaded %d rows from %s", len(df), path)
 
-    # ── Detect format ────────────────────────────────────────────────────────
-    binned_flags = [_is_binned_csv(df) for _, df in inputs]
-    if any(binned_flags) and not all(binned_flags):
-        logger.error(
-            "Mixed input formats: some CSVs are binned (have 'variable' column) "
-            "and some are not.  All inputs must be the same format."
-        )
-        sys.exit(1)
-    binned_mode = all(binned_flags)
+        binned_flags = [_is_binned_csv(df) for _, df in inputs]
+        if any(binned_flags) and not all(binned_flags):
+            logger.error(
+                "Mixed input formats: some CSVs are binned (have 'variable' column) "
+                "and some are not.  All inputs must be the same format."
+            )
+            sys.exit(1)
+        binned_mode = all(binned_flags)
+        out_stem    = args.output or Path("combined_asymmetry")
+
+    if len(inputs) < 2:
+        logger.warning("Only one input CSV — combined result equals input.")
     logger.info("Mode: %s", "binned" if binned_mode else "overall")
 
-    # ── Output stem ──────────────────────────────────────────────────────────
-    out_stem = args.output or Path("combined_asymmetry")
     out_stem.parent.mkdir(parents=True, exist_ok=True)
 
     # ── Combine ──────────────────────────────────────────────────────────────
@@ -656,14 +735,20 @@ if __name__ == "__main__":
     main()
 
 
-# Example usage — overall:
+# ── Direct mode (explicit CSV paths) ──────────────────────────────────────
 # python combine_asymmetry.py \
 #   output/C_pim_e10p7_x0p25_q23p3_z0p5_thpqm0p8/C_pim_e10p7_x0p25_q23p3_z0p5_thpqm0p8.csv \
-#   output/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0.csv \
-#   --output output/combined/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0AND0p8
+#   output/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0.csv
 #
-# Example usage — binned:
 # python combine_asymmetry.py \
 #   output/C_pim_e10p7_x0p25_q23p3_z0p5_thpqm0p8/C_pim_e10p7_x0p25_q23p3_z0p5_thpqm0p8_binned.csv \
-#   output/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0_binned.csv \
-#   --output output/combined/C_pim_e10p7_x0p25_q23p3_z0p5_binned_combined
+#   output/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0/C_pim_e10p7_x0p25_q23p3_z0p5_thpq2p0_binned.csv
+#
+# ── Config mode (locate CSVs automatically from base YAML) ─────────────────
+# python combine_asymmetry.py \
+#   --base_config config/C_pim_e10p7_x0p25_q23p3_z0p5_base.yaml \
+#   --thpq -0.8 2.0
+#
+# python combine_asymmetry.py \
+#   --base_config config/C_pim_e10p7_x0p25_q23p3_z0p5_base.yaml \
+#   --thpq -0.8 2.0 --is_binned
