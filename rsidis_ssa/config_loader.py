@@ -215,6 +215,7 @@ class CutsConfig(BaseModel):
     psdelta_hi:    float
     paero_npe_min: float
     phgc_npe_min:  float
+    phgc_p_threshold: Optional[float] = None  # GeV/c; null → unconditional HGC cut
     psshsum_max:   float   # SHMS calorimeter E/p upper cut (pion rejection)
 
     # Coincidence time — real peak

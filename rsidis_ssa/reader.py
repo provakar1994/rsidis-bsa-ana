@@ -66,7 +66,7 @@ _COMPUTED_PREREQS: dict[str, frozenset[str]] = {
 
 def required_branches(
     histo_cfgs: list[HistogramConfig],
-    cuts_cfg: CutsConfig,  # accepted for future use; currently unused
+    cuts_cfg: CutsConfig,
 ) -> set[str]:
     """
     Return the minimal set of ROOT-tree branch names needed for this config.
@@ -90,6 +90,10 @@ def required_branches(
     set[str]
     """
     branches: set[str] = set(_PID_AND_CTIME_BRANCHES)
+
+    # P_gtr_p is needed by the momentum-dependent HGC cut when enabled
+    if cuts_cfg.phgc_p_threshold is not None:
+        branches.add(BRANCH_PPi)
 
     for hcfg in histo_cfgs:
         # x-axis

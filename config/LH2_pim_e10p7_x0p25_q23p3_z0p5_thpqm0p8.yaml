@@ -57,6 +57,7 @@ cuts:
   psdelta_hi:    20.0    # %
   paero_npe_min:  2.0
   phgc_npe_min:   1.0
+  phgc_p_threshold: 2.9   # GeV/c — require HGC only above this momentum
   psshsum_max:    0.8
 
   # Coincidence time — real peak

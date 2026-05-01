@@ -135,6 +135,16 @@ def pid_mask(arrays: dict[str, np.ndarray], cuts_cfg: CutsConfig) -> np.ndarray:
     -------
     np.ndarray of bool, shape (n_events,)
     """
+    # HGC cut: unconditional, or momentum-dependent when phgc_p_threshold is set.
+    # phgc_p_threshold implements (P.gtr.p <= threshold || P.hgcer.npeSum >= min)
+    if cuts_cfg.phgc_p_threshold is not None:
+        hgc_cut = (
+            (arrays[BRANCH_PPi]     <= cuts_cfg.phgc_p_threshold)
+            | (arrays[BRANCH_PHGC_NPE] >= cuts_cfg.phgc_npe_min)
+        )
+    else:
+        hgc_cut = arrays[BRANCH_PHGC_NPE] >= cuts_cfg.phgc_npe_min
+
     return (
         (arrays[BRANCH_HSDELTA]   >= cuts_cfg.hsdelta_lo)
         & (arrays[BRANCH_HSDELTA]   <= cuts_cfg.hsdelta_hi)
@@ -143,7 +153,7 @@ def pid_mask(arrays: dict[str, np.ndarray], cuts_cfg: CutsConfig) -> np.ndarray:
         & (arrays[BRANCH_PSDELTA]   >= cuts_cfg.psdelta_lo)
         & (arrays[BRANCH_PSDELTA]   <= cuts_cfg.psdelta_hi)
         & (arrays[BRANCH_PAERO_NPE] >= cuts_cfg.paero_npe_min)
-        & (arrays[BRANCH_PHGC_NPE]  >= cuts_cfg.phgc_npe_min)
+        & hgc_cut
         & (arrays[BRANCH_PETOTTRACKNORM]   <= cuts_cfg.psshsum_max)
     )
 
