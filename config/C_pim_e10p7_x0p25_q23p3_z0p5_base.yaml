@@ -167,7 +167,7 @@ histograms:
     xlabel: '$\phi_{pq}$ (rad)'
     bin_in:
       branch: pt
-      edges: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+      edges: [0.0, 0.1, 0.2, 0.3]
 
   - name:   phipq_hplus
     branch: P_kin_secondary_ph_xq
