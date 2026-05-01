@@ -221,32 +221,43 @@ def _draw_phi_panels(
     amplitude, amplitude_err, chi2_ndf, n_used = fit_sinphi(phi_c, A_c, dA_c)
     hw = 0.5 * (phi_c[1] - phi_c[0]) if len(phi_c) > 1 else 0.0
 
-    for ax in (ax_full, ax_zoom):
-        ax.axhline(0.0, color="gray", lw=0.8, ls="--", zorder=1)
-
-        for (label, sub_in), color in zip(inputs_filtered, _INPUT_COLORS):
-            if sub_in.empty:
-                continue
-            ax.errorbar(sub_in["phi_center"].values,
-                        sub_in["A_phys"].values,
-                        yerr=sub_in["A_phys_err"].values,
-                        fmt="o", color=color, ms=4, lw=0.8,
-                        alpha=0.45, capsize=2, zorder=2, label=label)
-
-        ax.errorbar(phi_c, A_c, yerr=dA_c, xerr=hw,
-                    fmt="D", color="black", ms=6, lw=1.4,
-                    capsize=3, zorder=4, label="combined")
-
-        if np.isfinite(amplitude):
-            ax.plot(phi_fit, amplitude * np.sin(phi_fit),
-                    color="tomato", lw=1.8, zorder=3, label=r"$A\sin\phi$ fit")
-
-        ax.set_xlim(-np.pi * 1.05, np.pi * 1.05)
-        ax.set_xlabel(r"$\phi_{pq}$ (rad)")
-        ax.set_ylabel(r"$A_{LU}$")
-
+    # ── Full panel: all individual inputs + combined + fit ───────────────────
+    ax_full.axhline(0.0, color="gray", lw=0.8, ls="--", zorder=1)
+    for (label, sub_in), color in zip(inputs_filtered, _INPUT_COLORS):
+        if sub_in.empty:
+            continue
+        ax_full.errorbar(sub_in["phi_center"].values,
+                         sub_in["A_phys"].values,
+                         yerr=sub_in["A_phys_err"].values,
+                         fmt="o", color=color, ms=4, lw=0.8,
+                         alpha=0.45, capsize=2, zorder=2, label=label)
+    ax_full.errorbar(phi_c, A_c, yerr=dA_c, xerr=hw,
+                     fmt="D", color="black", ms=6, lw=1.4,
+                     capsize=3, zorder=4, label="combined")
+    if np.isfinite(amplitude):
+        ax_full.plot(phi_fit, amplitude * np.sin(phi_fit),
+                     color="tomato", lw=1.8, zorder=3, label=r"$A\sin\phi$ fit")
+    ax_full.set_xlim(-np.pi * 1.05, np.pi * 1.05)
+    ax_full.set_xlabel(r"$\phi_{pq}$ (rad)")
+    ax_full.set_ylabel(r"$A_{LU}$")
     ax_full.set_title(title, fontsize=9)
     ax_full.legend(fontsize=7)
+
+    # ── Zoom panel: combined points only + fit ───────────────────────────────
+    ax_zoom.axhline(0.0, color="gray", lw=0.8, ls="--", zorder=1)
+    ax_zoom.errorbar(phi_c, A_c, yerr=dA_c, xerr=hw,
+                     fmt="D", color="black", ms=6, lw=1.4,
+                     capsize=3, zorder=4, label="combined")
+    if np.isfinite(amplitude):
+        ax_zoom.plot(phi_fit, amplitude * np.sin(phi_fit),
+                     color="tomato", lw=1.8, zorder=3, label=r"$A\sin\phi$ fit")
+    ax_zoom.set_xlim(-np.pi * 1.05, np.pi * 1.05)
+    ax_zoom.set_xlabel(r"$\phi_{pq}$ (rad)")
+    ax_zoom.set_ylabel(r"$A_{LU}$")
+    ax_zoom.set_ylim(_ZOOM_LO, _ZOOM_HI)
+    ax_zoom.set_title(f"{title}  [zoom]", fontsize=9)
+
+    # ── Fit info text ────────────────────────────────────────────────────────
     if np.isfinite(amplitude):
         info = (
             rf"$A_{{LU}}^{{\sin\phi}} = {amplitude:+.4f} \pm {amplitude_err:.4f}$"
@@ -254,14 +265,18 @@ def _draw_phi_panels(
             f"\n$N_{{\\rm bins}} = {n_used}$"
             f"\n$N_{{\\rm inputs}} = {n_inputs}$"
         )
+        info_short = (
+            rf"$A_{{LU}}^{{\sin\phi}} = {amplitude:+.4f} \pm {amplitude_err:.4f}$"
+            f"\n$\\chi^2/\\mathrm{{ndf}} = {chi2_ndf:.2f}$"
+        )
     else:
         info = "fit: insufficient bins"
-    ax_full.text(0.97, 0.97, info, transform=ax_full.transAxes,
-                 va="top", ha="right", fontsize=7, family="monospace",
-                 bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
-
-    ax_zoom.set_ylim(_ZOOM_LO, _ZOOM_HI)
-    ax_zoom.set_title(f"{title}  [zoom]", fontsize=9)
+        info_short = info
+    _text_kw = dict(va="top", ha="right", fontsize=7, family="monospace",
+                    zorder=10,
+                    bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
+    ax_full.text(0.97, 0.97, info,       transform=ax_full.transAxes, **_text_kw)
+    ax_zoom.text(0.97, 0.97, info_short, transform=ax_zoom.transAxes, **_text_kw)
 
 
 # ---------------------------------------------------------------------------

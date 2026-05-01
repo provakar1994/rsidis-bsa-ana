@@ -1101,40 +1101,57 @@ def _page_asymmetry(
 
         fit_curve = ar.amplitude * np.sin(phi_fit) if np.isfinite(ar.amplitude) else None
 
-        for col in range(2):
-            ax = axes_grid[row, col]
-            ax.axhline(0.0, color="gray", lw=0.9, ls="--", zorder=1)
-            ax.errorbar(phi_v, A_v, yerr=dA_v, xerr=hw,
-                        fmt="o", color="steelblue", ms=5, lw=1.2, capsize=3,
-                        label=r"$A_{\rm phys}(\phi_k)$", zorder=3)
-            if fit_curve is not None:
-                ax.plot(phi_fit, fit_curve,
-                        color="tomato", lw=1.5, zorder=2,
-                        label=rf"$A \sin\phi$  fit")
-            ax.set_xlim(-np.pi * 1.05, np.pi * 1.05)
-            ax.set_xlabel(r"$\phi_{pq}$ (rad)")
-            ax.set_ylabel(r"$A_{LU}$")
+        ax_full = axes_grid[row, 0]
+        ax_zoom = axes_grid[row, 1]
 
-            if col == 0:
-                # Full auto-scale column: title + info box
-                ax.set_title(base)
-                ax.legend(fontsize=7)
-                if np.isfinite(ar.amplitude):
-                    info = (
-                        rf"$A_{{LU}}^{{\sin\phi}} = {ar.amplitude:+.4f} \pm {ar.amplitude_err:.4f}$"
-                        f"\n$\\chi^2/\\mathrm{{ndf}} = {ar.chi2_ndf:.2f}$"
-                        f"\n$N_{{\\rm bins}} = {ar.n_bins_used}$"
-                        f"\n$P_{{\\rm beam}} = {P_beam:.2f}$"
-                    )
-                else:
-                    info = "fit: insufficient bins"
-                ax.text(0.97, 0.97, info, transform=ax.transAxes,
-                        va="top", ha="right", fontsize=7, family="monospace",
+        _text_kw = dict(va="top", ha="right", fontsize=7, family="monospace",
+                        zorder=10,
                         bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
-            else:
-                # Zoomed column
-                ax.set_ylim(ZOOM_LO, ZOOM_HI)
-                ax.set_title(f"{base}  [zoom: {ZOOM_LO}, {ZOOM_HI}]", fontsize=9)
+
+        if np.isfinite(ar.amplitude):
+            info = (
+                rf"$A_{{LU}}^{{\sin\phi}} = {ar.amplitude:+.4f} \pm {ar.amplitude_err:.4f}$"
+                f"\n$\\chi^2/\\mathrm{{ndf}} = {ar.chi2_ndf:.2f}$"
+                f"\n$N_{{\\rm bins}} = {ar.n_bins_used}$"
+                f"\n$P_{{\\rm beam}} = {P_beam:.2f}$"
+            )
+            info_short = (
+                rf"$A_{{LU}}^{{\sin\phi}} = {ar.amplitude:+.4f} \pm {ar.amplitude_err:.4f}$"
+                f"\n$\\chi^2/\\mathrm{{ndf}} = {ar.chi2_ndf:.2f}$"
+            )
+        else:
+            info = info_short = "fit: insufficient bins"
+
+        # ── Full panel ───────────────────────────────────────────────────────
+        ax_full.axhline(0.0, color="gray", lw=0.9, ls="--", zorder=1)
+        ax_full.errorbar(phi_v, A_v, yerr=dA_v, xerr=hw,
+                         fmt="o", color="steelblue", ms=5, lw=1.2, capsize=3,
+                         label=r"$A_{\rm phys}(\phi_k)$", zorder=3)
+        if fit_curve is not None:
+            ax_full.plot(phi_fit, fit_curve,
+                         color="tomato", lw=1.5, zorder=2,
+                         label=rf"$A \sin\phi$  fit")
+        ax_full.set_xlim(-np.pi * 1.05, np.pi * 1.05)
+        ax_full.set_xlabel(r"$\phi_{pq}$ (rad)")
+        ax_full.set_ylabel(r"$A_{LU}$")
+        ax_full.set_title(base)
+        ax_full.legend(fontsize=7)
+        ax_full.text(0.97, 0.97, info, transform=ax_full.transAxes, **_text_kw)
+
+        # ── Zoom panel ───────────────────────────────────────────────────────
+        ax_zoom.axhline(0.0, color="gray", lw=0.9, ls="--", zorder=1)
+        ax_zoom.errorbar(phi_v, A_v, yerr=dA_v, xerr=hw,
+                         fmt="o", color="steelblue", ms=5, lw=1.2, capsize=3,
+                         zorder=3)
+        if fit_curve is not None:
+            ax_zoom.plot(phi_fit, fit_curve,
+                         color="tomato", lw=1.5, zorder=2)
+        ax_zoom.set_xlim(-np.pi * 1.05, np.pi * 1.05)
+        ax_zoom.set_xlabel(r"$\phi_{pq}$ (rad)")
+        ax_zoom.set_ylabel(r"$A_{LU}$")
+        ax_zoom.set_ylim(ZOOM_LO, ZOOM_HI)
+        ax_zoom.set_title(f"{base}  [zoom: {ZOOM_LO}, {ZOOM_HI}]", fontsize=9)
+        ax_zoom.text(0.97, 0.97, info_short, transform=ax_zoom.transAxes, **_text_kw)
 
         logger.info(
             "Asymmetry [%s]  A_LU^sinphi = %+.4f ± %.4f  chi2/ndf = %.2f  "
