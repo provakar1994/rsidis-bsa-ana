@@ -49,6 +49,7 @@ Unknown YAML keys raise a ValidationError immediately at load time.
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Union
 
@@ -675,14 +676,36 @@ class AnalysisConfig(BaseModel):
 # Loader
 # ---------------------------------------------------------------------------
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """
+    Recursively merge *override* into *base*.
+
+    - Nested dicts are merged key-by-key (override wins on conflicts).
+    - All other types (lists, scalars) are replaced wholesale by the override.
+    """
+    result = copy.deepcopy(base)
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
 def load_config(yaml_path: str | Path) -> AnalysisConfig:
     """
     Load and validate an analysis config from a YAML file.
 
+    If the YAML contains a ``_base:`` key, its value is treated as a path
+    (relative to the config file's directory) to a base YAML.  The base is
+    loaded first; the override file is deep-merged on top.  Nested dicts are
+    merged key-by-key; lists and scalars are replaced wholesale.  Chained
+    bases (a base that itself has ``_base:``) are not supported.
+
     Parameters
     ----------
     yaml_path : path-like
-        Path to the YAML config file.
+        Path to the YAML config file (or override file).
 
     Returns
     -------
@@ -691,7 +714,7 @@ def load_config(yaml_path: str | Path) -> AnalysisConfig:
     Raises
     ------
     FileNotFoundError
-        If the YAML file does not exist.
+        If the YAML file or its ``_base:`` target does not exist.
     ValueError
         If validation fails (wrong types, unknown keys, logical errors).
         The message includes the file path and Pydantic's full error detail.
@@ -707,6 +730,27 @@ def load_config(yaml_path: str | Path) -> AnalysisConfig:
         raise ValueError(
             f"Config file {yaml_path} did not parse to a YAML mapping (got {type(raw).__name__})"
         )
+
+    if "_base" in raw:
+        base_ref = raw.pop("_base")
+        base_path = (yaml_path.parent / base_ref).resolve()
+        if not base_path.exists():
+            raise FileNotFoundError(
+                f"Base config not found: {base_path}\n"
+                f"Referenced as '_base: {base_ref}' in {yaml_path}"
+            )
+        with base_path.open() as fh:
+            base_raw = yaml.safe_load(fh)
+        if not isinstance(base_raw, dict):
+            raise ValueError(
+                f"Base config {base_path} did not parse to a YAML mapping"
+            )
+        if "_base" in base_raw:
+            raise ValueError(
+                f"Chained _base references are not supported "
+                f"(base file {base_path} also contains '_base:')"
+            )
+        raw = _deep_merge(base_raw, raw)
 
     try:
         return AnalysisConfig.model_validate(raw)
