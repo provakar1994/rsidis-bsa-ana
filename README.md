@@ -8,9 +8,10 @@ One YAML config file drives one complete analysis (one kinematic setting, one ta
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Package Layout](#package-layout)
-3. [Module Dependency Tree](#module-dependency-tree)
-4. [Workflow: Step by Step](#workflow-step-by-step)
+2. [Pipeline Automation](#pipeline-automation)
+3. [Package Layout](#package-layout)
+4. [Module Dependency Tree](#module-dependency-tree)
+5. [Workflow: Step by Step](#workflow-step-by-step)
    - [Step 1 — Configuration](#step-1--configuration)
    - [Step 2 — Run Selection](#step-2--run-selection)
    - [Step 3 — Per-Run Normalization Weights](#step-3--per-run-normalization-weights)
@@ -20,23 +21,123 @@ One YAML config file drives one complete analysis (one kinematic setting, one ta
    - [Step 7 — Run Combination](#step-7--run-combination)
    - [Step 8 — Background Subtraction](#step-8--background-subtraction)
    - [Step 9 — Asymmetry Calculation](#step-9--asymmetry-calculation)
-5. [Diagnostic PDF Pages](#diagnostic-pdf-pages)
-6. [Configuration Reference](#configuration-reference)
-7. [Run Constants Reference](#run-constants-reference)
-8. [Branch Name Reference](#branch-name-reference)
+6. [Diagnostic PDF Pages](#diagnostic-pdf-pages)
+7. [Configuration Reference](#configuration-reference)
+8. [Run Constants Reference](#run-constants-reference)
+9. [Branch Name Reference](#branch-name-reference)
 
 ---
 
 ## Quick Start
 
+Single setting, manually:
+
 ```bash
-python analysis.py config/example_C_z05_thpq2.yaml
-python analysis.py config/example_LH2_z05_thpq2.yaml
+python analysis.py config/C_pip_e10p7_x0p25_q23p3_z0p5_thpq2p0.yaml
 ```
 
-Each command produces a multi-page PDF (`<config-stem>_diagnostics.pdf`) with
-coincidence-time cuts, per-run yield diagnostics, per-histogram subtraction overlays,
-and a statistics table.
+Full automated pipeline for all run-period-1 settings:
+
+```bash
+python run_pipeline.py \
+    --settings data/settings/rpr1_pip_settings.csv \
+               data/settings/rpr1_pim_settings.csv
+```
+
+Each `analysis.py` run produces a multi-page PDF (`<config-stem>_diagnostics.pdf`) and
+a CSV of per-bin asymmetry values (`output/<stem>/<stem>.csv`).
+
+---
+
+## Pipeline Automation
+
+`run_pipeline.py` orchestrates the full analysis across all kinematic settings defined
+in one or more settings CSVs. It has three sequential steps:
+
+| Step | What it does |
+|------|-------------|
+| `generate` | Creates `config/<stem>_base.yaml` + `config/<stem>_thpq<val>.yaml` for every family |
+| `analyze` | Runs `analysis.py` for each per-thpq config; skips if output CSV already exists |
+| `combine` | Runs `combine_asymmetry.py` across all thpq values per family (skips single-thpq families) |
+
+All steps are idempotent: existing outputs are skipped unless `--force` is given.
+
+### Common invocations
+
+```bash
+# Full pipeline, all settings
+python run_pipeline.py \
+    --settings data/settings/rpr1_pip_settings.csv \
+               data/settings/rpr1_pim_settings.csv
+
+# Preview every action without executing anything
+python run_pipeline.py --settings ... --dry-run
+
+# Generate configs only (no analysis yet)
+python run_pipeline.py --settings ... --steps generate
+
+# One target, one z value, all steps
+python run_pipeline.py --settings ... --target LH2 --z 0.5
+
+# One target, one thpq — run analysis only, then combine the whole family
+python run_pipeline.py --settings ... --target C --z 0.5 --thpq -0.8 --steps analyze
+python run_pipeline.py --settings ... --target C --z 0.5 --steps combine
+
+# Re-run everything even if outputs exist
+python run_pipeline.py --settings ... --force
+```
+
+### Settings CSV format
+
+Each row is one kinematic setting (one target + one thpq). The pipeline groups rows
+by `(target, ebeam, x, Q2, z, run_type)` to form *families* and generates one base
+config per family.
+
+```
+target,ebeam,x,Q2,z,thpq,run_type
+C,10.6716,0.25,3.3,0.5,-0.8,PI+SIDIS
+C,10.6716,0.25,3.3,0.5,2.0,PI+SIDIS
+C,10.6716,0.25,3.3,0.5,5.2,PI+SIDIS
+```
+
+### YAML config inheritance
+
+Generated configs use a two-file base/override pattern to avoid duplication.
+The *base* file (`*_base.yaml`) holds all shared parameters; each per-thpq *override*
+file is four lines:
+
+```yaml
+# thpq = -0.8
+_base: C_pip_e10p7_x0p25_q23p3_z0p5_base.yaml
+
+setting:
+  thpq: -0.8
+```
+
+`config_loader.load_config()` merges the two files before validation: nested dicts
+are merged key-by-key; scalars and lists in the override replace the base value.
+Base files must not themselves reference another `_base` (one level only).
+
+### Combining asymmetries across thpq values
+
+`combine_asymmetry.py` has two run modes:
+
+**Direct mode** (list CSV files explicitly):
+```bash
+python combine_asymmetry.py output/C_pip_.../C_pip_..._thpqm0p8.csv \
+                            output/C_pip_.../C_pip_..._thpq2p0.csv \
+                            --output output/combined/C_pip_combined.csv
+```
+
+**Config mode** (derive paths from the base config):
+```bash
+python combine_asymmetry.py \
+    --base_config config/C_pip_e10p7_x0p25_q23p3_z0p5_base.yaml \
+    --thpq -0.8 2.0 5.2 \
+    --is_binned          # omit for unbinned
+```
+The output path defaults to
+`output/combined/<stem>_thpq<v1>AND<v2>...(_binned).csv`.
 
 ---
 
@@ -44,16 +145,28 @@ and a statistics table.
 
 ```
 ssa/
-├── analysis.py                  # Top-level driver — generates the diagnostic PDF
+├── analysis.py                  # Single-setting driver — generates diagnostic PDF + output CSV
+├── combine_asymmetry.py         # Combine asymmetries across thpq values (IVW)
+├── run_pipeline.py              # Automated pipeline: generate configs → analyze → combine
 ├── config/
-│   ├── example_C_z05_thpq2.yaml
-│   ├── example_LH2_z05_thpq2.yaml
+│   ├── <target>_<pip|pim>_<kin>_base.yaml     # Base config shared across thpq values
+│   ├── <target>_<pip|pim>_<kin>_thpq<v>.yaml  # Per-thpq override (4 lines; _base: ...)
 │   └── run_constants.yaml       # Run-period constants (dummy scales, beam_bunch_ns, …)
 ├── data/
 │   ├── rsidis_bigtable_pass0p1.csv   # Master runlist
-│   └── rootfiles_pass0p1/            # Symlinked or local ROOT skim files
+│   ├── rootfiles_pass0p1/            # Symlinked or local ROOT skim files
+│   └── settings/
+│       ├── rpr1_pip_settings.csv     # All π⁺ settings for run period 1
+│       └── rpr1_pim_settings.csv     # All π⁻ settings for run period 1
+├── output/
+│   ├── <stem>/                       # Per-setting output directory
+│   │   ├── <stem>.csv                # Unbinned asymmetry table
+│   │   ├── <stem>_binned.csv         # Binned (pt slice) asymmetry table
+│   │   └── <stem>_diagnostics.pdf    # Multi-page diagnostic plots
+│   └── combined/
+│       └── <stem>_thpq<v1>AND<v2>.csv   # Combined asymmetry across thpq values
 └── rsidis_ssa/
-    ├── config_loader.py         # YAML → validated Pydantic models
+    ├── config_loader.py         # YAML → validated Pydantic models; handles _base: inheritance
     ├── runlist.py               # Run selection from the CSV runlist
     ├── normalization.py         # Per-run weight calculation
     ├── reader.py                # ROOT file I/O (uproot)
@@ -525,6 +638,26 @@ excluded from WLS) is equivalent in practice but cleaner.
 ---
 
 ## Configuration Reference
+
+### Base/override inheritance
+
+To avoid repeating identical blocks across thpq values, configs use a two-file
+pattern.  A *base* file holds all shared parameters; a lightweight *override* file
+specifies only `_base:` and the differing values:
+
+```yaml
+# Per-thpq override — the entire file
+_base: C_pip_e10p7_x0p25_q23p3_z0p5_base.yaml
+
+setting:
+  thpq: -0.8
+```
+
+`config_loader.load_config()` loads the base, deep-merges the override (nested dicts
+merge key-by-key; scalars/lists are replaced), then validates the result.  Chained
+bases (`_base` inside a base file) are not supported.
+
+### Full config reference
 
 ```yaml
 setting:

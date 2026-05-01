@@ -1,5 +1,4 @@
-# Carbon, PI+SIDIS, thpq = 2.0 mrad
-# Overrides histograms to add hsp / psp (HMS and SHMS momentum spectra).
+# thpq = 2.0
 _base: C_pip_e10p7_x0p25_q23p3_z0p5_base.yaml
 
 setting:

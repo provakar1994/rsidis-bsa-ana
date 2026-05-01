@@ -1,5 +1,0 @@
-# Carbon, PI-SIDIS, thpq = -0.8 mrad
-_base: C_pim_e10p7_x0p25_q23p3_z0p5_base.yaml
-
-setting:
-  thpq: -0.8

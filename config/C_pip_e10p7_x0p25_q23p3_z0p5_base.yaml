@@ -1,5 +1,5 @@
 # ============================================================
-# RSIDIS SSA base configuration — Carbon, PI+SIDIS
+# RSIDIS SSA base configuration — C, PI+SIDIS
 # Kinematic point: e=10.6716, x=0.25, Q2=3.3, z=0.5
 #
 # THIS FILE IS A BASE — do not pass it directly to analysis.py.
