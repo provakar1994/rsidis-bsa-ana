@@ -899,7 +899,7 @@ def _page_histogram_2d(
     values = h.values()             # type: ignore[attr-defined]  shape (bins_x, bins_y)
 
     if hname == "pt_vs_phi":
-        _page_pt_vs_phi_2d(pdf, hname, hcfg, x_edges, y_edges, values)
+        _page_pt_vs_phi_2d(pdf, hcfg, x_edges, y_edges, values)
         return
 
     fig, ax = plt.subplots(figsize=(7.0, 5.5))
@@ -916,28 +916,22 @@ def _page_histogram_2d(
     plt.close(fig)
 
 
-def _page_pt_vs_phi_2d(
-    pdf:      "PdfPages",
-    hname:    str,
+def _draw_pt_vs_phi_2d(
+    ax:       object,
     hcfg:     object,
     x_edges:  np.ndarray,
     y_edges:  np.ndarray,
     values:   np.ndarray,
 ) -> None:
-    """Draw P_T vs phi in a polar-style Cartesian canvas."""
-    fig, ax = plt.subplots(figsize=(6.4, 5.1))
+    """Draw the P_T vs phi polar-style Cartesian plot onto an existing axis."""
     plot_values = values.T.copy()
     plot_values[(plot_values == 0.0) | ~np.isfinite(plot_values)] = np.nan
     cmap = plt.get_cmap("jet").copy()
     cmap.set_bad("white")
 
     im = ax.pcolormesh(
-        x_edges,
-        y_edges,
-        plot_values,
-        cmap=cmap,
-        shading="auto",
-        zorder=2,
+        x_edges, y_edges, plot_values,
+        cmap=cmap, shading="auto", zorder=2,
     )
     im.set_rasterized(True)
 
@@ -954,8 +948,6 @@ def _page_pt_vs_phi_2d(
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("")
     ax.set_ylabel("")
-    ax.set_title("")
-    fig.suptitle("")
 
     ax.axhline(0.0, color="0.55", lw=0.7, zorder=3)
     ax.axvline(0.0, color="0.55", lw=0.7, zorder=3)
@@ -963,14 +955,8 @@ def _page_pt_vs_phi_2d(
     ring_values = np.arange(0.1, 0.92 * r_frame + 1.0e-9, 0.1)
     for r in ring_values:
         ax.add_patch(plt.Circle(
-            (0.0, 0.0),
-            r,
-            fill=False,
-            ec="red",
-            ls=":",
-            lw=0.85,
-            alpha=0.9,
-            zorder=4,
+            (0.0, 0.0), r,
+            fill=False, ec="red", ls=":", lw=0.85, alpha=0.9, zorder=4,
         ))
         label_angle = np.deg2rad(24.0)
         if np.isclose((r * 10) % 2, 0.0):
@@ -978,12 +964,8 @@ def _page_pt_vs_phi_2d(
                 r * np.cos(label_angle) + 0.015 * r_frame,
                 r * np.sin(label_angle) + 0.015 * r_frame,
                 rf"$P_T = {r:.1f}\ \mathrm{{GeV}}$",
-                color="red",
-                fontsize=8,
-                fontweight="bold",
-                ha="left",
-                va="center",
-                zorder=5,
+                color="red", fontsize=8, fontweight="bold",
+                ha="left", va="center", zorder=5,
             )
 
     ax.text(0.5, 1.02, r"$\phi_h = 90^\circ$", transform=ax.transAxes,
@@ -1009,6 +991,16 @@ def _page_pt_vs_phi_2d(
         spine.set_linewidth(0.8)
         spine.set_color("0.25")
 
+def _page_pt_vs_phi_2d(
+    pdf:      "PdfPages",
+    hcfg:     object,
+    x_edges:  np.ndarray,
+    y_edges:  np.ndarray,
+    values:   np.ndarray,
+) -> None:
+    """Draw P_T vs phi in a polar-style Cartesian canvas (standalone page)."""
+    fig, ax = plt.subplots(figsize=(6.4, 5.1))
+    _draw_pt_vs_phi_2d(ax, hcfg, x_edges, y_edges, values)
     fig.tight_layout(pad=1.7)
     pdf.savefig(fig)
     plt.close(fig)
@@ -1336,8 +1328,15 @@ def _page_binned_summary(
     bin_results: list[tuple[AsymmetryResult, float, float, float]],
     variable:    str,
     histo_name:  str,
+    h_pt_vs_phi: object | None = None,
+    hcfg_pt:     object | None = None,
 ) -> None:
-    """Plot A_LU^sinphi vs the binned kinematic variable with error bars."""
+    """
+    Plot A_LU^sinphi vs the binned kinematic variable.
+
+    If *h_pt_vs_phi* and *hcfg_pt* are provided, draws a two-column layout
+    with the pt_vs_phi 2-D yield plot on the left.
+    """
     if not bin_results:
         return
 
@@ -1348,27 +1347,38 @@ def _page_binned_summary(
     hi_vals    = np.array([entry[2] for entry in bin_results])
     xerr_lo    = centers - lo_vals
     xerr_hi    = hi_vals - centers
-
     valid = np.isfinite(amplitudes) & np.isfinite(amp_errs)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.axhline(0.0, color="gray", lw=0.9, ls="--", zorder=1)
+    has_2d = h_pt_vs_phi is not None and hcfg_pt is not None
+    if has_2d:
+        fig, (ax_2d, ax_ssa) = plt.subplots(
+            1, 2, figsize=(14, 6.0),
+            gridspec_kw={"width_ratios": [1, 1.2]},
+        )
+        x_edges = h_pt_vs_phi.axes[0].edges   # type: ignore[attr-defined]
+        y_edges = h_pt_vs_phi.axes[1].edges   # type: ignore[attr-defined]
+        values  = h_pt_vs_phi.values()        # type: ignore[attr-defined]
+        _draw_pt_vs_phi_2d(ax_2d, hcfg_pt, x_edges, y_edges, values)
+    else:
+        fig, ax_ssa = plt.subplots(figsize=(8, 5))
+
+    ax_ssa.axhline(0.0, color="gray", lw=0.9, ls="--", zorder=1)
     if valid.any():
-        ax.errorbar(
+        ax_ssa.errorbar(
             centers[valid], amplitudes[valid],
             yerr=amp_errs[valid],
             xerr=[xerr_lo[valid], xerr_hi[valid]],
             fmt="o", color="steelblue", ms=6, lw=1.2, capsize=4, zorder=3,
             label=r"$A_{LU}^{\sin\phi}$",
         )
-    ax.set_xlabel(variable)
-    ax.set_ylabel(r"$A_{LU}^{\sin\phi}$")
-    ax.set_title(
+    ax_ssa.set_xlabel(variable)
+    ax_ssa.set_ylabel(r"$A_{LU}^{\sin\phi}$")
+    ax_ssa.set_title(
         rf"$A_{{LU}}^{{\sin\phi}}$ vs {variable}  —  {histo_name}",
         fontsize=11, fontweight="bold",
     )
-    ax.legend(fontsize=8)
-    fig.tight_layout()
+    ax_ssa.legend(fontsize=8)
+    fig.tight_layout(pad=1.7)
     pdf.savefig(fig)
     plt.close(fig)
 
@@ -1529,6 +1539,9 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
 
         # Per-bin SSA pages: one page per bin for each histogram with bin_in
         # bin_groups collects (variable, [(ar, lo, hi, center), ...]) for CSV export
+        _hcfg_pt_vs_phi = next((h for h in cfg.histograms if h.name == "pt_vs_phi"), None)
+        _h_pt_vs_phi    = final.get("pt_vs_phi") if _hcfg_pt_vs_phi is not None else None
+
         bin_groups: list[tuple[str, list[tuple[AsymmetryResult, float, float, float]]]] = []
         for _hcfg_bin in cfg.histograms:
             if _hcfg_bin.bin_in is None:
@@ -1554,7 +1567,10 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
                     _this_group.append((_bin_ars[0], _lo, _hi, _center))
 
             if _this_group:
-                _page_binned_summary(pdf, _this_group, _bin_in.branch, _hcfg_bin.name)
+                _page_binned_summary(
+                    pdf, _this_group, _bin_in.branch, _hcfg_bin.name,
+                    h_pt_vs_phi=_h_pt_vs_phi, hcfg_pt=_hcfg_pt_vs_phi,
+                )
                 bin_groups.append((_bin_in.branch, _this_group))
 
         _page_statistics(pdf, result, sub_results)
