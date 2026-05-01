@@ -1,30 +1,26 @@
 # ============================================================
 # RSIDIS SSA analysis configuration
-# Setting: Carbon, PI-SIDIS, z=0.5, thpq=2.0, ebeam=8.5831
+# Setting: LH2, PI-SIDIS, z=0.5, thpq=2.0, ebeam=8.5831
 # ============================================================
 
 # ---- Kinematic setting ----
-# Uniquely selects runs from the runlist CSV.
-# ebeam, x, Q2, z, thpq are matched with a tolerance of ±0.02.
 setting:
   ebeam:    10.6716
   x:        0.25
   Q2:       3.3
   z:        0.5
   thpq:     -0.8
-  run_type: PI+SIDIS   # PI-SIDIS or PI+SIDIS
+  run_type: PI-SIDIS
 
 # Signal target to analyze.
-# For cryo targets (LH2, LD2), set do_dummy_subtraction: true.
-target: C
+target: LD2
 run_period: period_1
 
-# Subtract e⁺ charge-symmetric background (runs with hms_p > 0)?
-# The e⁺ runs for this setting are identified automatically from the runlist.
+# Subtract e⁺ charge-symmetric background?
 do_eplus_subtraction: true
 
-# Subtract dummy target (only for LH2/LD2)?
-do_dummy_subtraction: false
+# Subtract dummy target (LH2/LD2 only)?
+do_dummy_subtraction: true
 
 # ---- Run selection filter ----
 # runs_include: null means use all runs matching the kinematic setting.
@@ -44,16 +40,11 @@ runlist:
   csv: ../data/rsidis_bigtable_pass0p1.csv
 
 # ---- Normalization ----
-# comp_livetime is a fraction (0–1), not a percentage.
-# boil_corr is applied only when do_dummy_subtraction is true AND
-# the target is a cryo target (LH2/LD2).
 normalization:
   charge_column:  BCM2_Q
-  weight_scheme:  charge_only   # eff_corrected_counts | eff_corrected_charge | charge_only
+  weight_scheme:  eff_corrected_charge   # eff_corrected_counts | eff_corrected_charge | charge_only
 
 # ---- Event selection cuts ----
-# These cuts are applied identically to signal (e⁻) and background (e⁺) runs.
-# Nothing in the analysis code is hardcoded — change values here only.
 cuts:
   # HMS electron PID
   hsdelta_lo:    -8.0    # %
@@ -69,11 +60,9 @@ cuts:
   psshsum_max:    0.8
 
   # Coincidence time — real peak
-  # Use 'auto' to take ctmean from the runlist CSV for each run,
-  # or supply a fixed value in ns.
-  ctime_real_center:          auto    # use CSV ctmean per run
-  ctime_real_nsigma:          null    # ± n * ctsigma around the peak or null ← use fallback window always
-  ctime_real_window_fallback: 2.0     # ns half-width when ctsigma = NaN
+  ctime_real_center:          auto
+  ctime_real_nsigma:          null   # ± n * ctsigma around the peak or null ← use fallback window always
+  ctime_real_window_fallback: 2.0
 
   # Coincidence time — random sideband (discrete windows around beam-bunch peaks)
   # Peak centers: ctmean ± (n_skip + k) × beam_bunch_ns  for k = 1…n_peaks
@@ -83,9 +72,6 @@ cuts:
   ctime_random_n_peaks_hi: 0   # random peaks to use on the high-ctime side
 
 # ---- Histograms ----
-# Each entry defines one 1-D histogram.
-# branch: the T-tree branch name (uses '_' separators, no '.').
-# Adding a new histogram requires only a new block here — no code changes.
 histograms:
   # HMS acceptance
   - name:   hsdelta
@@ -157,7 +143,7 @@ histograms:
     branch: H_kin_primary_Q2
     bins:   50
     xmin:    2.0
-    xmax:    6.0
+    xmax:    5.0
     xlabel: '$Q^{2}$ (GeV$^{2}$)'
 
   - name:   xbj
@@ -188,9 +174,6 @@ histograms:
     xmin:   -3.14159265
     xmax:    3.14159265
     xlabel: '$\phi_{pq}$ (rad)'
-    bin_in:
-      branch: pt
-      edges: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
 
   - name:   phipq_hplus
     branch: P_kin_secondary_ph_xq
@@ -198,7 +181,7 @@ histograms:
     xmin:   -3.14159265
     xmax:    3.14159265
     xlabel: '$\phi_{pq}$ (rad)  [$h^{+}$]'
-    helicity_cut: positive    # fill only when effective helicity > 0
+    helicity_cut: positive
 
   - name:   phipq_hminus
     branch: P_kin_secondary_ph_xq
@@ -206,17 +189,4 @@ histograms:
     xmin:   -3.14159265
     xmax:    3.14159265
     xlabel: '$\phi_{pq}$ (rad)  [$h^{-}$]'
-    helicity_cut: negative    # fill only when effective helicity < 0
-
-  # 2D histogram of Pt vs phi for acceptance studies
-  - name:     pt_vs_phi
-    branch:   ptx
-    bins:     50
-    xmin:     -0.5
-    xmax:     0.5
-    xlabel:   '$P_T\cos(\phi_{pq})$ (GeV/c)'
-    branch_y: pty
-    bins_y:   50
-    ymin:     -0.5
-    ymax:     0.5
-    ylabel:   '$P_T\sin(\phi_{pq})$ (GeV/c)'
+    helicity_cut: negative

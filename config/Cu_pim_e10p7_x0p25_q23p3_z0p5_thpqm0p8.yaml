@@ -12,11 +12,11 @@ setting:
   Q2:       3.3
   z:        0.5
   thpq:     -0.8
-  run_type: PI+SIDIS   # PI-SIDIS or PI+SIDIS
+  run_type: PI-SIDIS   # PI-SIDIS or PI+SIDIS
 
 # Signal target to analyze.
 # For cryo targets (LH2, LD2), set do_dummy_subtraction: true.
-target: C
+target: Cu
 run_period: period_1
 
 # Subtract e⁺ charge-symmetric background (runs with hms_p > 0)?
@@ -188,9 +188,6 @@ histograms:
     xmin:   -3.14159265
     xmax:    3.14159265
     xlabel: '$\phi_{pq}$ (rad)'
-    bin_in:
-      branch: pt
-      edges: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
 
   - name:   phipq_hplus
     branch: P_kin_secondary_ph_xq
@@ -207,16 +204,3 @@ histograms:
     xmax:    3.14159265
     xlabel: '$\phi_{pq}$ (rad)  [$h^{-}$]'
     helicity_cut: negative    # fill only when effective helicity < 0
-
-  # 2D histogram of Pt vs phi for acceptance studies
-  - name:     pt_vs_phi
-    branch:   ptx
-    bins:     50
-    xmin:     -0.5
-    xmax:     0.5
-    xlabel:   '$P_T\cos(\phi_{pq})$ (GeV/c)'
-    branch_y: pty
-    bins_y:   50
-    ymin:     -0.5
-    ymax:     0.5
-    ylabel:   '$P_T\sin(\phi_{pq})$ (GeV/c)'

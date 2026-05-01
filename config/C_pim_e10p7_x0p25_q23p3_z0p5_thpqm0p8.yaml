@@ -93,7 +93,7 @@ histograms:
     bins:   16
     xmin:   -8.0
     xmax:    8.0
-    xlabel: "HMS #delta (%)"
+    xlabel: 'HMS $\delta$ (%)'
 
   - name:   hsxptar
     branch: H_gtr_th
@@ -122,7 +122,7 @@ histograms:
     bins:   30
     xmin:   -10.0
     xmax:    20.0
-    xlabel: "SHMS #delta (%)"
+    xlabel: 'SHMS $\delta$ (%)'
 
   - name:   psxptar
     branch: P_gtr_th
@@ -158,40 +158,28 @@ histograms:
     bins:   50
     xmin:    2.0
     xmax:    6.0
-    xlabel: "Q^{2} (GeV^{2})"
+    xlabel: '$Q^{2}$ (GeV$^{2}$)'
 
   - name:   xbj
     branch: H_kin_primary_x_bj
     bins:   50
     xmin:    0.1
     xmax:    0.4
-    xlabel: "x_{Bj}"
+    xlabel: '$x_{Bj}$'
 
   - name:   zhad
     branch: z
     bins:   45
     xmin:    0.1
     xmax:    1.0
-    xlabel: "z_{had}"
+    xlabel: '$z_{had}$'
 
   - name:   Pt
     branch: pt
     bins:   50
     xmin:    0.0
     xmax:    0.5
-    xlabel: "P_{T} (GeV/c)"
-
-  - name:     pt_vs_phi
-    branch:   ptx
-    bins:     50
-    xmin:     -0.5
-    xmax:     0.5
-    xlabel:   "P_{T}cos(#phi_{pq}) (GeV/c)"
-    branch_y: pty
-    bins_y:   50
-    ymin:     -0.5
-    ymax:     0.5
-    ylabel:   "P_{T}sin(#phi_{pq}) (GeV/c)"
+    xlabel: '$P_T$ (GeV/c)'
 
   # Azimuthal angle (full + helicity-split)
   - name:   phipq
@@ -199,17 +187,17 @@ histograms:
     bins:   16
     xmin:   -3.14159265
     xmax:    3.14159265
-    xlabel: "#phi_{pq} (rad)"
+    xlabel: '$\phi_{pq}$ (rad)'
     bin_in:
       branch: pt
-      edges: [0.0, 0.1, 0.2, 0.3]
+      edges: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
 
   - name:   phipq_hplus
     branch: P_kin_secondary_ph_xq
     bins:   16
     xmin:   -3.14159265
     xmax:    3.14159265
-    xlabel: "#phi_{pq} (rad)  [h^{+}]"
+    xlabel: '$\phi_{pq}$ (rad)  [$h^{+}$]'
     helicity_cut: positive    # fill only when effective helicity > 0
 
   - name:   phipq_hminus
@@ -217,5 +205,18 @@ histograms:
     bins:   16
     xmin:   -3.14159265
     xmax:    3.14159265
-    xlabel: "#phi_{pq} (rad)  [h^{-}]"
+    xlabel: '$\phi_{pq}$ (rad)  [$h^{-}$]'
     helicity_cut: negative    # fill only when effective helicity < 0
+
+  # 2D histogram of Pt vs phi for acceptance studies
+  - name:     pt_vs_phi
+    branch:   ptx
+    bins:     50
+    xmin:     -0.5
+    xmax:     0.5
+    xlabel:   '$P_T\cos(\phi_{pq})$ (GeV/c)'
+    branch_y: pty
+    bins_y:   50
+    ymin:     -0.5
+    ymax:     0.5
+    ylabel:   '$P_T\sin(\phi_{pq})$ (GeV/c)'

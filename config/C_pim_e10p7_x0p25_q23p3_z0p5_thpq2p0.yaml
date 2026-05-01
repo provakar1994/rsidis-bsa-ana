@@ -11,8 +11,8 @@ setting:
   x:        0.25
   Q2:       3.3
   z:        0.5
-  thpq:     -0.8
-  run_type: PI+SIDIS   # PI-SIDIS or PI+SIDIS
+  thpq:     2.0
+  run_type: PI-SIDIS   # PI-SIDIS or PI+SIDIS
 
 # Signal target to analyze.
 # For cryo targets (LH2, LD2), set do_dummy_subtraction: true.
@@ -214,9 +214,9 @@ histograms:
     bins:     50
     xmin:     -0.5
     xmax:     0.5
-    xlabel:   '$P_T\cos(\phi_{pq})$ (GeV/c)'
+    xlabel:   '$P_T\cos\phi$ (GeV/c)'
     branch_y: pty
     bins_y:   50
     ymin:     -0.5
     ymax:     0.5
-    ylabel:   '$P_T\sin(\phi_{pq})$ (GeV/c)'
+    ylabel:   '$P_T\sin\phi$ (GeV/c)'
