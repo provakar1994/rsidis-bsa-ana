@@ -68,17 +68,22 @@ def _particle_tex(particle: str) -> str:
     return r"$\pi^+$" if particle == "pip" else r"$\pi^-$"
 
 
+def _marker_style(n: int) -> str:
+    styles = ['o', 's', '^', 'D', 'v', 'p', '*', 'h', '<', '>']
+    return styles[n % len(styles)]
+
+
 def _pt_bin_label(hmin: float, hmax: float) -> str:
     return f"$p_T \\in [{hmin:.2f},\\,{hmax:.2f})$ GeV/$c$"
 
 
 def _z_colors(z_vals: list[float]) -> dict[float, tuple]:
-    cmap = plt.colormaps["viridis"].resampled(max(len(z_vals), 2))
+    cmap = plt.colormaps["tab10"].resampled(max(len(z_vals), 2))
     return {z: cmap(i / max(len(z_vals) - 1, 1)) for i, z in enumerate(z_vals)}
 
 
 def _pt_colors(n: int) -> list[tuple]:
-    cmap = plt.colormaps["plasma"].resampled(max(n, 2))
+    cmap = plt.colormaps["Set1"].resampled(max(n, 2))
     return [cmap(i / max(n - 1, 1)) for i in range(n)]
 
 
@@ -88,13 +93,16 @@ def _pt_colors(n: int) -> list[tuple]:
 
 def _panel_vs_pt(ax: plt.Axes, df: pd.DataFrame, colors: dict) -> None:
     """Left panel: A vs p_T, one curve per z."""
+    counter = 0
     for z, grp in df.groupby("z"):
         grp = grp.sort_values("bin_center")
+        mstyle = _marker_style(counter)
         ax.errorbar(
             grp["bin_center"], grp["asym"], yerr=grp["asym_err"],
-            fmt="o-", color=colors[z], label=f"$z = {z}$",
+            fmt=mstyle, color=colors[z], label=f"$z = {z}$",
             capsize=3, markersize=5, lw=1.3, elinewidth=1.0,
         )
+        counter += 1
     ax.axhline(0, color="k", lw=0.7, ls="--", zorder=0)
     ax.set_xlabel("$p_T$ (GeV/$c$)", fontsize=10)
     ax.set_ylabel(r"$A_{LU}^{\sin\phi}$", fontsize=10)
@@ -115,9 +123,10 @@ def _panel_vs_z(ax: plt.Axes, df: pd.DataFrame) -> None:
     for i, row in bins.iterrows():
         grp   = df[df["histogram"] == row["histogram"]].sort_values("z")
         label = _pt_bin_label(row["hmin"], row["hmax"])
+        mstyle = _marker_style(i)
         ax.errorbar(
             grp["z"], grp["asym"], yerr=grp["asym_err"],
-            fmt="s-", color=colors[i], label=label,
+            fmt=mstyle, color=colors[i], label=label,
             capsize=3, markersize=5, lw=1.3, elinewidth=1.0,
         )
     ax.axhline(0, color="k", lw=0.7, ls="--", zorder=0)
