@@ -265,7 +265,8 @@ def main() -> None:
 
             # ── comparison grid ──────────────────────────────────────────────
             title = _page_suptitle(df_p, particle)
-            fig   = _fig_grid(df_p, particle, tgts, bins, title, ylim=ylim)
+            fig   = _fig_grid(df_p, particle, tgts, bins, title, ylim=ylim,
+                              fmt="bs")
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
 
