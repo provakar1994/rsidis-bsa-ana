@@ -117,12 +117,14 @@ def _ax_style(ax: plt.Axes, *, xlabel: bool, ylabel: bool) -> None:
 
 
 def _page_suptitle(df: pd.DataFrame, particle: str,
-                   qty: str, suffix: str = "") -> str:
-    x  = df["x"].iloc[0]
-    q2 = df["q2"].iloc[0]
+                   qty: str, suffix: str = "",
+                   epsilon: float | None = None) -> str:
+    x   = df["x"].iloc[0]
+    q2  = df["q2"].iloc[0]
+    eps = f",  $\\varepsilon = {epsilon:.3f}$" if epsilon is not None else ""
     return (f"${qty}${suffix} — "
             f"{_particle_tex(particle)},  "
-            f"$x = {x:.2f}$,  $Q^2 = {q2:.1f}$ GeV$^2$")
+            f"$x = {x:.2f}$,  $Q^2 = {q2:.1f}$ GeV$^2${eps}")
 
 
 def _ylabel(qty: str, target: str | None, diff_ref: str | None) -> str:
@@ -252,6 +254,7 @@ def _emit_pages(
     ylim_diff:    tuple | None,
     fmt_comp:     str,
     fmt_diff:     str,
+    epsilon:      float | None = None,
 ) -> int:
     """Write comparison + difference pages for one observable. Returns page count."""
     n = 0
@@ -262,7 +265,7 @@ def _emit_pages(
             continue
         tgts = [t for t in targets if t in df_p["target"].values]
 
-        title = _page_suptitle(df_p, particle, qty)
+        title = _page_suptitle(df_p, particle, qty, epsilon=epsilon)
         fig   = _fig_grid(df_p, particle, tgts, bins, title,
                           qty=qty, ylim=ylim, fmt=fmt_comp)
         pdf.savefig(fig, bbox_inches="tight")
@@ -281,7 +284,8 @@ def _emit_pages(
 
             df_diff = _compute_diff(df_p, reference)
             title   = _page_suptitle(df_p, particle, qty,
-                                     suffix=rf" $-$ {reference}")
+                                     suffix=rf" $-$ {reference}",
+                                     epsilon=epsilon)
             fig     = _fig_grid(df_diff, particle, dtgts, bins, title,
                                 qty=qty, diff_ref=reference,
                                 ylim=ylim_diff, fmt=fmt_diff)
@@ -390,6 +394,7 @@ def main() -> None:
                 ylim_diff  = ylim_flu_diff,
                 fmt_comp   = "bs",
                 fmt_diff   = "rs",
+                epsilon    = args.epsilon,
             )
 
     print(f"Saved: {out}  ({n_pages} pages)")
