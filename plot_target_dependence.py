@@ -3,22 +3,32 @@
 Compare SSA across targets and compute differences from a reference target.
 
 Reads all *_binned_summary.csv files in output/combined/ and produces a
-multi-page PDF:
+multi-page PDF.  Without --epsilon, pages cover A_LU^sinφ only.
+With --epsilon, additional pages show F_LU^sinφ/F_UU:
 
-  Pages 1–2 — Target comparison grid (pip / pim):
-               rows = targets, cols = p_T bins, each panel: A vs z
-  Pages 3–4 — Difference grid (pip / pim):
-               rows = non-reference targets, cols = p_T bins,
-               each panel: A_target − A_reference vs z
+    F_LU^sinφ / F_UU = A_LU^sinφ / sqrt(2 ε (1-ε))
+
+Page layout
+-----------
+  1  pip  — A_LU^sinφ, all targets vs z (grid: rows=targets, cols=p_T bins)
+  2  pim  — same
+  3  pip  — A_LU^sinφ difference (A_target − A_ref)
+  4  pim  — same
+  5  pip  — F_LU/F_UU, all targets vs z          (only with --epsilon)
+  6  pim  — same
+  7  pip  — F_LU/F_UU difference                  (only with --epsilon)
+  8  pim  — same
 
 Must be run from the project root.
 
 Usage
 -----
     python plot_target_dependence.py
-    python plot_target_dependence.py --reference LH2
-    python plot_target_dependence.py --targets C Cu LD2 LH2
-    python plot_target_dependence.py --output my_plot.pdf
+    python plot_target_dependence.py --epsilon 0.7
+    python plot_target_dependence.py --epsilon 0.7 \\
+        --ylim -0.02 0.12  --ylim-diff -0.06 0.06 \\
+        --ylim-flu -0.05 0.20  --ylim-flu-diff -0.10 0.10
+    python plot_target_dependence.py --targets C Cu LD2 LH2 --reference LH2
 """
 
 from __future__ import annotations
@@ -37,6 +47,10 @@ PLOTS_DIR     = Path("output/plots")
 
 _PARTICLE_COL = {"pip": "pi+", "pim": "pi-"}
 _TARGET_ORDER = ["LH2", "LD2", "C", "Cu", "Al"]   # preferred display order
+
+# LaTeX quantity symbols (without outer $) used to build axis labels
+_QTY_A   = r"A_{LU}^{\sin\phi}"
+_QTY_F   = r"F_{LU}^{\sin\phi}/F_{UU}"
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +86,19 @@ def _pt_bins(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Derived observables
+# ---------------------------------------------------------------------------
+
+def _to_flu_fuu(df: pd.DataFrame, epsilon: float) -> pd.DataFrame:
+    """Scale asym → F_LU^sinφ / F_UU = asym / sqrt(2 ε (1−ε))."""
+    scale      = 1.0 / np.sqrt(2.0 * epsilon * (1.0 - epsilon))
+    df         = df.copy()
+    df["asym"]     = df["asym"]     * scale
+    df["asym_err"] = df["asym_err"] * scale
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -89,12 +116,21 @@ def _ax_style(ax: plt.Axes, *, xlabel: bool, ylabel: bool) -> None:
         ax.tick_params(labelleft=False)
 
 
-def _page_suptitle(df: pd.DataFrame, particle: str, suffix: str = "") -> str:
-    x   = df["x"].iloc[0]
-    q2  = df["q2"].iloc[0]
-    return (f"SSA $A_{{LU}}^{{\\sin\\phi}}${suffix} — "
+def _page_suptitle(df: pd.DataFrame, particle: str,
+                   qty: str, suffix: str = "") -> str:
+    x  = df["x"].iloc[0]
+    q2 = df["q2"].iloc[0]
+    return (f"${qty}${suffix} — "
             f"{_particle_tex(particle)},  "
             f"$x = {x:.2f}$,  $Q^2 = {q2:.1f}$ GeV$^2$")
+
+
+def _ylabel(qty: str, target: str | None, diff_ref: str | None) -> str:
+    """Build y-axis label from the quantity symbol and optional subscripts."""
+    if diff_ref is None:
+        return f"${qty}$"
+    return (rf"${qty}|_{{\rm {target}}}"
+            rf" - {qty}|_{{\rm {diff_ref}}}$")
 
 
 # ---------------------------------------------------------------------------
@@ -102,18 +138,17 @@ def _page_suptitle(df: pd.DataFrame, particle: str, suffix: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 def _compute_diff(df: pd.DataFrame, reference: str) -> pd.DataFrame:
-    """Subtract reference-target asymmetry from every other target."""
+    """Subtract reference-target values from every other target."""
     ref = (df[df["target"] == reference]
-           .rename(columns={"asym": "_asym_ref", "asym_err": "_asym_err_ref"})
-           [["particle", "z", "histogram", "_asym_ref", "_asym_err_ref"]])
+           .rename(columns={"asym": "_ref", "asym_err": "_ref_err"})
+           [["particle", "z", "histogram", "_ref", "_ref_err"]])
 
     other  = df[df["target"] != reference].copy()
     merged = other.merge(ref, on=["particle", "z", "histogram"], how="inner")
 
-    merged["asym"]     = merged["asym"] - merged["_asym_ref"]
-    merged["asym_err"] = np.sqrt(merged["asym_err"] ** 2
-                                 + merged["_asym_err_ref"] ** 2)
-    return merged.drop(columns=["_asym_ref", "_asym_err_ref"])
+    merged["asym"]     = merged["asym"] - merged["_ref"]
+    merged["asym_err"] = np.sqrt(merged["asym_err"] ** 2 + merged["_ref_err"] ** 2)
+    return merged.drop(columns=["_ref", "_ref_err"])
 
 
 # ---------------------------------------------------------------------------
@@ -126,16 +161,17 @@ def _fig_grid(
     targets:  list[str],
     bins:     pd.DataFrame,
     suptitle: str,
+    qty:      str = _QTY_A,
     diff_ref: str | None = None,
     ylim:     tuple[float, float] | None = None,
-    fmt:      str = "ks",
+    fmt:      str = "bs",
 ) -> plt.Figure:
     """
     Grid of panels: rows = targets, cols = p_T bins.
     All panels share x- and y-axes; no gap between columns or rows.
 
-    diff_ref: when set, each row's y-axis label reads
-              A_LU|_<target> - A_LU|_<diff_ref>.
+    qty      : LaTeX quantity symbol (without outer $) used to build labels.
+    diff_ref : when set, each left-column panel gets a per-row difference label.
     """
     n_rows = len(targets)
     n_cols = len(bins)
@@ -187,12 +223,9 @@ def _fig_grid(
                         transform=ax.transAxes, va="top", ha="left", fontsize=9)
 
             if is_left:
-                if diff_ref is not None:
-                    yl = (rf"$A_{{LU}}^{{\sin\phi}}|_{{\rm {target}}}"
-                          rf" - A_{{LU}}^{{\sin\phi}}|_{{\rm {diff_ref}}}$")
-                else:
-                    yl = r"$A_{LU}^{\sin\phi}$"
-                ax.set_ylabel(yl, fontsize=8)
+                ax.set_ylabel(
+                    _ylabel(qty, target, diff_ref), fontsize=8,
+                )
 
             if is_bottom:
                 ax.set_xlabel("$z$", fontsize=10)
@@ -203,12 +236,69 @@ def _fig_grid(
 
 
 # ---------------------------------------------------------------------------
+# Helper: emit one pair of pages (comparison + diff) for a given DataFrame
+# ---------------------------------------------------------------------------
+
+def _emit_pages(
+    pdf:          PdfPages,
+    df_all:       pd.DataFrame,
+    targets:      list[str],
+    diff_targets: list[str],
+    bins:         pd.DataFrame,
+    has_diff:     bool,
+    reference:    str,
+    qty:          str,
+    ylim:         tuple | None,
+    ylim_diff:    tuple | None,
+    fmt_comp:     str,
+    fmt_diff:     str,
+) -> int:
+    """Write comparison + difference pages for one observable. Returns page count."""
+    n = 0
+    for particle in ("pip", "pim"):
+        col  = _PARTICLE_COL[particle]
+        df_p = df_all[df_all["particle"] == col]
+        if df_p.empty:
+            continue
+        tgts = [t for t in targets if t in df_p["target"].values]
+
+        title = _page_suptitle(df_p, particle, qty)
+        fig   = _fig_grid(df_p, particle, tgts, bins, title,
+                          qty=qty, ylim=ylim, fmt=fmt_comp)
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+        n += 1
+
+    if has_diff:
+        for particle in ("pip", "pim"):
+            col   = _PARTICLE_COL[particle]
+            df_p  = df_all[df_all["particle"] == col]
+            if df_p.empty:
+                continue
+            dtgts = [t for t in diff_targets if t in df_p["target"].values]
+            if not dtgts:
+                continue
+
+            df_diff = _compute_diff(df_p, reference)
+            title   = _page_suptitle(df_p, particle, qty,
+                                     suffix=rf" $-$ {reference}")
+            fig     = _fig_grid(df_diff, particle, dtgts, bins, title,
+                                qty=qty, diff_ref=reference,
+                                ylim=ylim_diff, fmt=fmt_diff)
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+            n += 1
+
+    return n
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Target-dependence of SSA: comparison and difference grids",
+        description="Target-dependence of SSA/structure-function ratio vs z",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -224,21 +314,42 @@ def main() -> None:
         "--variable", default="pt", metavar="VAR",
         help="Binning variable in summary CSV (default: pt)",
     )
+    # ── A_LU ylim ────────────────────────────────────────────────────────────
     parser.add_argument(
         "--ylim", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
-        help="Y-axis range for comparison pages (1-2), e.g. --ylim -0.05 0.15",
+        help="Y range for A_LU comparison pages",
     )
     parser.add_argument(
         "--ylim-diff", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
-        help="Y-axis range for difference pages (3-4), e.g. --ylim-diff -0.05 0.05",
+        help="Y range for A_LU difference pages",
     )
+    # ── F_LU/F_UU ────────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--epsilon", type=float, default=None, metavar="EPS",
+        help="Virtual-photon depolarisation ε ∈ (0,1); enables F_LU/F_UU pages",
+    )
+    parser.add_argument(
+        "--ylim-flu", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
+        help="Y range for F_LU/F_UU comparison pages",
+    )
+    parser.add_argument(
+        "--ylim-flu-diff", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
+        help="Y range for F_LU/F_UU difference pages",
+    )
+    # ── output ───────────────────────────────────────────────────────────────
     parser.add_argument(
         "--output", default=None, metavar="PDF",
         help="Output PDF (default: output/plots/target_dependence.pdf)",
     )
-    args      = parser.parse_args()
-    ylim      = tuple(args.ylim)      if args.ylim      else None
-    ylim_diff = tuple(args.ylim_diff) if args.ylim_diff else None
+    args = parser.parse_args()
+
+    if args.epsilon is not None and not (0.0 < args.epsilon < 1.0):
+        parser.error("--epsilon must be in (0, 1)")
+
+    ylim          = tuple(args.ylim)          if args.ylim          else None
+    ylim_diff     = tuple(args.ylim_diff)     if args.ylim_diff     else None
+    ylim_flu      = tuple(args.ylim_flu)      if args.ylim_flu      else None
+    ylim_flu_diff = tuple(args.ylim_flu_diff) if args.ylim_flu_diff else None
 
     df_all  = _load_all(args.variable)
     targets = _ordered_targets(df_all, args.targets)
@@ -253,43 +364,34 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     diff_targets = [t for t in targets if t != args.reference]
-    has_diff     = args.reference in df_all["target"].values and diff_targets
+    has_diff     = args.reference in df_all["target"].values and bool(diff_targets)
 
+    n_pages = 0
     with PdfPages(out) as pdf:
-        for particle in ("pip", "pim"):
-            col   = _PARTICLE_COL[particle]
-            df_p  = df_all[df_all["particle"] == col]
-            if df_p.empty:
-                continue
-            tgts  = [t for t in targets if t in df_p["target"].values]
+        # ── A_LU^sinφ pages ──────────────────────────────────────────────────
+        n_pages += _emit_pages(
+            pdf, df_all, targets, diff_targets, bins, has_diff,
+            reference  = args.reference,
+            qty        = _QTY_A,
+            ylim       = ylim,
+            ylim_diff  = ylim_diff,
+            fmt_comp   = "bs",
+            fmt_diff   = "rs",
+        )
 
-            # ── comparison grid ──────────────────────────────────────────────
-            title = _page_suptitle(df_p, particle)
-            fig   = _fig_grid(df_p, particle, tgts, bins, title, ylim=ylim,
-                              fmt="bs")
-            pdf.savefig(fig, bbox_inches="tight")
-            plt.close(fig)
+        # ── F_LU^sinφ / F_UU pages (only when --epsilon is given) ────────────
+        if args.epsilon is not None:
+            df_flu = _to_flu_fuu(df_all, args.epsilon)
+            n_pages += _emit_pages(
+                pdf, df_flu, targets, diff_targets, bins, has_diff,
+                reference  = args.reference,
+                qty        = _QTY_F,
+                ylim       = ylim_flu,
+                ylim_diff  = ylim_flu_diff,
+                fmt_comp   = "bs",
+                fmt_diff   = "rs",
+            )
 
-        # ── difference grids ─────────────────────────────────────────────────
-        if has_diff:
-            ref = args.reference
-            for particle in ("pip", "pim"):
-                col   = _PARTICLE_COL[particle]
-                df_p  = df_all[df_all["particle"] == col]
-                if df_p.empty:
-                    continue
-                dtgts = [t for t in diff_targets if t in df_p["target"].values]
-                if not dtgts:
-                    continue
-
-                df_diff = _compute_diff(df_p, ref)
-                title   = _page_suptitle(df_p, particle, suffix=rf" $-$ {ref}")
-                fig     = _fig_grid(df_diff, particle, dtgts, bins, title,
-                                    diff_ref=ref, ylim=ylim_diff, fmt="rs")
-                pdf.savefig(fig, bbox_inches="tight")
-                plt.close(fig)
-
-    n_pages = 2 + (2 if has_diff else 0)
     print(f"Saved: {out}  ({n_pages} pages)")
 
 
