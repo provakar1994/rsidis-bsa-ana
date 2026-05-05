@@ -3,10 +3,10 @@
 Plot z-dependence of the SSA for a given target and hadron.
 
 Reads all *_binned_summary.csv files in output/combined/, filters by
-target and particle, and produces a two-panel figure:
+target and particle, and produces a two-page PDF:
 
-  Left  — A_LU^sinφ vs p_T  (one curve per z value)
-  Right — A_LU^sinφ vs z    (one curve per p_T bin)
+  Page 1 — A_LU^sinφ vs p_T (one curve per z) and vs z (one curve per p_T bin)
+  Page 2 — A_LU^sinφ vs z, one panel per p_T bin, shared y-axis, no gap
 
 Must be run from the project root.
 
@@ -24,6 +24,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from matplotlib.backends.backend_pdf import PdfPages
 import pandas as pd
 
 COMBINED_DIR = Path("output/combined")
@@ -69,8 +70,9 @@ def _particle_tex(particle: str) -> str:
 
 
 def _marker_style(n: int) -> str:
-    styles = ['o', 's', '^', 'D', 'v', 'p', '*', 'h', '<', '>']
+    styles = ["o", "s", "^", "D", "v", "p", "*", "h"]
     return styles[n % len(styles)]
+
 
 
 def _pt_bin_label(hmin: float, hmax: float) -> str:
@@ -87,56 +89,118 @@ def _pt_colors(n: int) -> list[tuple]:
     return [cmap(i / max(n - 1, 1)) for i in range(n)]
 
 
-# ---------------------------------------------------------------------------
-# Individual panels
-# ---------------------------------------------------------------------------
+def _pt_bins(df: pd.DataFrame) -> pd.DataFrame:
+    """Unique pt bins sorted by hmin."""
+    return (df.drop_duplicates("histogram")
+              .sort_values("hmin")[["histogram", "hmin", "hmax", "bin_center"]]
+              .reset_index(drop=True))
 
-def _panel_vs_pt(ax: plt.Axes, df: pd.DataFrame, colors: dict) -> None:
-    """Left panel: A vs p_T, one curve per z."""
-    counter = 0
-    for z, grp in df.groupby("z"):
-        grp = grp.sort_values("bin_center")
-        mstyle = _marker_style(counter)
-        ax.errorbar(
-            grp["bin_center"], grp["asym"], yerr=grp["asym_err"],
-            fmt=mstyle, color=colors[z], label=f"$z = {z}$",
-            capsize=3, markersize=5, lw=1.3, elinewidth=1.0,
-        )
-        counter += 1
-    ax.axhline(0, color="k", lw=0.7, ls="--", zorder=0)
-    ax.set_xlabel("$p_T$ (GeV/$c$)", fontsize=10)
-    ax.set_ylabel(r"$A_{LU}^{\sin\phi}$", fontsize=10)
-    ax.set_title("Asymmetry vs $p_T$", fontsize=10)
-    ax.legend(fontsize=8, framealpha=0.7)
+
+def _suptitle(df: pd.DataFrame, particle: str) -> str:
+    target = df["target"].iloc[0]
+    x      = df["x"].iloc[0]
+    q2     = df["q2"].iloc[0]
+    return (f"SSA $A_{{LU}}^{{\\sin\\phi}}$ — "
+            f"{target}, {_particle_tex(particle)},  "
+            f"$x = {x:.2f}$,  $Q^2 = {q2:.1f}$ GeV$^2$")
+
+
+def _ax_style(ax: plt.Axes, ylabel: bool = True) -> None:
     ax.xaxis.set_minor_locator(mticker.AutoMinorLocator())
     ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
     ax.tick_params(which="both", direction="in", top=True, right=True)
+    if not ylabel:
+        ax.tick_params(labelleft=False)
 
 
-def _panel_vs_z(ax: plt.Axes, df: pd.DataFrame) -> None:
-    """Right panel: A vs z, one curve per p_T bin."""
-    bins   = (df.drop_duplicates("histogram")
-                .sort_values("hmin")[["histogram", "hmin", "hmax"]]
-                .reset_index(drop=True))
-    colors = _pt_colors(len(bins))
+# ---------------------------------------------------------------------------
+# Page 1: overview — A vs p_T (left) and A vs z (right)
+# ---------------------------------------------------------------------------
 
+def _fig_overview(df: pd.DataFrame, particle: str) -> plt.Figure:
+    z_vals  = sorted(df["z"].unique())
+    z_colors = _z_colors(z_vals)
+    bins    = _pt_bins(df)
+    pt_cols = _pt_colors(len(bins))
+
+    fig, (ax_pt, ax_z) = plt.subplots(1, 2, figsize=(11, 4.5))
+    fig.suptitle(_suptitle(df, particle), fontsize=10)
+
+    # left: A vs p_T, one curve per z
+    for i, z in enumerate(z_vals):
+        grp = df[df["z"] == z].sort_values("bin_center")
+        ax_pt.errorbar(
+            grp["bin_center"], grp["asym"], yerr=grp["asym_err"],
+            fmt=_marker_style(i), color=z_colors[z], label=f"$z = {z}$",
+            capsize=3, markersize=5, lw=1.3, elinewidth=1.0,
+        )
+    ax_pt.axhline(0, color="k", lw=0.7, ls="--", zorder=0)
+    ax_pt.set_xlabel("$p_T$ (GeV/$c$)", fontsize=10)
+    ax_pt.set_ylabel(r"$A_{LU}^{\sin\phi}$", fontsize=10)
+    ax_pt.set_title("Asymmetry vs $p_T$", fontsize=10)
+    ax_pt.legend(fontsize=8, framealpha=0.7)
+    _ax_style(ax_pt)
+
+    # right: A vs z, one curve per p_T bin
     for i, row in bins.iterrows():
         grp   = df[df["histogram"] == row["histogram"]].sort_values("z")
         label = _pt_bin_label(row["hmin"], row["hmax"])
-        mstyle = _marker_style(i)
-        ax.errorbar(
+        ax_z.errorbar(
             grp["z"], grp["asym"], yerr=grp["asym_err"],
-            fmt=mstyle, color=colors[i], label=label,
+            fmt=_marker_style(i), color=pt_cols[i], label=label,
             capsize=3, markersize=5, lw=1.3, elinewidth=1.0,
         )
-    ax.axhline(0, color="k", lw=0.7, ls="--", zorder=0)
-    ax.set_xlabel("$z$", fontsize=10)
-    ax.set_ylabel(r"$A_{LU}^{\sin\phi}$", fontsize=10)
-    ax.set_title("Asymmetry vs $z$", fontsize=10)
-    ax.legend(fontsize=8, framealpha=0.7)
-    ax.xaxis.set_minor_locator(mticker.AutoMinorLocator())
-    ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
-    ax.tick_params(which="both", direction="in", top=True, right=True)
+    ax_z.axhline(0, color="k", lw=0.7, ls="--", zorder=0)
+    ax_z.set_xlabel("$z$", fontsize=10)
+    ax_z.set_ylabel(r"$A_{LU}^{\sin\phi}$", fontsize=10)
+    ax_z.set_title("Asymmetry vs $z$", fontsize=10)
+    ax_z.legend(fontsize=8, framealpha=0.7)
+    _ax_style(ax_z)
+
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Page 2: A vs z  (one panel per p_T bin, shared y-axis)
+# ---------------------------------------------------------------------------
+
+def _fig_vs_z_panels(df: pd.DataFrame, particle: str) -> plt.Figure:
+    bins = _pt_bins(df)
+    n    = len(bins)
+
+    fig, axes = plt.subplots(
+        1, n,
+        sharey=True,
+        figsize=(3.5 * n, 4.5),
+    )
+    fig.subplots_adjust(wspace=0)
+    if n == 1:
+        axes = [axes]
+
+    fig.suptitle(_suptitle(df, particle), fontsize=10)
+
+    for i, (ax, row) in enumerate(zip(axes, bins.itertuples())):
+        grp = df[df["histogram"] == row.histogram].sort_values("z")
+
+        ax.errorbar(
+            grp["z"], grp["asym"], yerr=grp["asym_err"],
+            fmt="ks", capsize=3, markersize=5, elinewidth=1.0, lw=0,
+        )
+        ax.axhline(0, color="gray", lw=0.8, ls="--", zorder=0)
+
+        ax.text(
+            0.05, 0.95,
+            f"$\\langle P_T \\rangle = {row.bin_center:.2f}$ GeV/$c$",
+            transform=ax.transAxes, va="top", ha="left", fontsize=9,
+        )
+
+        ax.set_xlabel("$z$", fontsize=10)
+        if i == 0:
+            ax.set_ylabel(r"$A_{LU}^{\sin\phi}$", fontsize=10)
+        _ax_style(ax, ylabel=(i == 0))
+
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +209,7 @@ def _panel_vs_z(ax: plt.Axes, df: pd.DataFrame) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Plot z-dependence of SSA: A_LU^sinφ vs p_T and vs z",
+        description="Plot z-dependence of SSA (two-page PDF)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -154,38 +218,27 @@ def main() -> None:
     parser.add_argument("--particle", required=True, choices=["pip", "pim"],
                         help="Hadron: pip or pim")
     parser.add_argument("--variable", default="pt", metavar="VAR",
-                        help="Binning variable used in summary CSV (default: pt)")
+                        help="Binning variable in summary CSV (default: pt)")
     parser.add_argument("--output",   default=None, metavar="PDF",
-                        help="Output PDF path (default: output/plots/<target>_<particle>_z_dependence.pdf)")
+                        help="Output PDF (default: output/plots/<target>_<particle>_z_dependence.pdf)")
     args = parser.parse_args()
 
     df = _load(args.target, args.particle, args.variable)
 
-    z_vals = sorted(df["z"].unique())
-    colors = _z_colors(z_vals)
-
-    # ── figure ──────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-
-    x_val  = df["x"].iloc[0]
-    q2_val = df["q2"].iloc[0]
-    fig.suptitle(
-        f"SSA $A_{{LU}}^{{\\sin\\phi}}$ — "
-        f"{args.target}, {_particle_tex(args.particle)},  "
-        f"$x = {x_val:.2f}$,  $Q^2 = {q2_val:.1f}$ GeV$^2$",
-        fontsize=11,
-    )
-
-    _panel_vs_pt(axes[0], df, colors)
-    _panel_vs_z(axes[1], df)
-
-    fig.tight_layout()
-
     out = (Path(args.output) if args.output
            else PLOTS_DIR / f"{args.target}_{args.particle}_z_dependence.pdf")
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, bbox_inches="tight")
-    print(f"Saved: {out}")
+
+    with PdfPages(out) as pdf:
+        fig1 = _fig_overview(df, args.particle)
+        pdf.savefig(fig1, bbox_inches="tight")
+        plt.close(fig1)
+
+        fig2 = _fig_vs_z_panels(df, args.particle)
+        pdf.savefig(fig2, bbox_inches="tight")
+        plt.close(fig2)
+
+    print(f"Saved: {out}  (2 pages)")
 
 
 if __name__ == "__main__":
