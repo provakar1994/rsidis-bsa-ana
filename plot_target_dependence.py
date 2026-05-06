@@ -3,21 +3,18 @@
 Compare SSA across targets and compute differences from a reference target.
 
 Reads all *_binned_summary.csv files in output/combined/ and produces a
-multi-page PDF.  Without --epsilon, pages cover A_LU^sinφ only.
+multi-page PDF.  π⁺ and π⁻ are overlaid on the same panels with distinct
+colours and markers.  Without --epsilon, pages cover A_LU^sinφ only.
 With --epsilon, additional pages show F_LU^sinφ/F_UU:
 
     F_LU^sinφ / F_UU = A_LU^sinφ / sqrt(2 ε (1-ε))
 
 Page layout
 -----------
-  1  pip  — A_LU^sinφ, all targets vs z (grid: rows=targets, cols=p_T bins)
-  2  pim  — same
-  3  pip  — A_LU^sinφ difference (A_target − A_ref)
-  4  pim  — same
-  5  pip  — F_LU/F_UU, all targets vs z          (only with --epsilon)
-  6  pim  — same
-  7  pip  — F_LU/F_UU difference                  (only with --epsilon)
-  8  pim  — same
+  1 — A_LU^sinφ, all targets vs z (both π)
+  2 — A_LU^sinφ difference (A_target − A_ref) (both π)
+  3 — F_LU/F_UU, all targets vs z              (only with --epsilon)
+  4 — F_LU/F_UU difference                     (only with --epsilon)
 
 Must be run from the project root.
 
@@ -39,18 +36,24 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
 COMBINED_DIR  = Path("output/combined")
 PLOTS_DIR     = Path("output/plots")
 
-_PARTICLE_COL = {"pip": "pi+", "pim": "pi-"}
 _TARGET_ORDER = ["LH2", "LD2", "C", "Cu", "Al"]   # preferred display order
 
 # LaTeX quantity symbols (without outer $) used to build axis labels
-_QTY_A   = r"A_{LU}^{\sin\phi}"
-_QTY_F   = r"F_{LU}^{\sin\phi}/F_{UU}"
+_QTY_A = r"A_{LU}^{\sin\phi}"
+_QTY_F = r"F_{LU}^{\sin\phi}/F_{UU}"
+
+# Per-particle plot styles
+_PARTICLE_STYLES = {
+    "pi+": dict(marker="o", color="black", label=r"$\pi^+$"),
+    "pi-": dict(marker="s", color="red", label=r"$\pi^-$"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +94,8 @@ def _pt_bins(df: pd.DataFrame) -> pd.DataFrame:
 
 def _to_flu_fuu(df: pd.DataFrame, epsilon: float) -> pd.DataFrame:
     """Scale asym → F_LU^sinφ / F_UU = asym / sqrt(2 ε (1−ε))."""
-    scale      = 1.0 / np.sqrt(2.0 * epsilon * (1.0 - epsilon))
-    df         = df.copy()
+    scale          = 1.0 / np.sqrt(2.0 * epsilon * (1.0 - epsilon))
+    df             = df.copy()
     df["asym"]     = df["asym"]     * scale
     df["asym_err"] = df["asym_err"] * scale
     return df
@@ -101,10 +104,6 @@ def _to_flu_fuu(df: pd.DataFrame, epsilon: float) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _particle_tex(particle: str) -> str:
-    return r"$\pi^+$" if particle == "pip" else r"$\pi^-$"
-
 
 def _ax_style(ax: plt.Axes, *, xlabel: bool, ylabel: bool) -> None:
     ax.xaxis.set_minor_locator(mticker.AutoMinorLocator())
@@ -116,19 +115,16 @@ def _ax_style(ax: plt.Axes, *, xlabel: bool, ylabel: bool) -> None:
         ax.tick_params(labelleft=False)
 
 
-def _page_suptitle(df: pd.DataFrame, particle: str,
-                   qty: str, suffix: str = "",
-                   epsilon: float | None = None) -> str:
+def _page_suptitle(df: pd.DataFrame, qty: str,
+                   suffix: str = "", epsilon: float | None = None) -> str:
     x   = df["x"].iloc[0]
     q2  = df["q2"].iloc[0]
     eps = f",  $\\varepsilon = {epsilon:.3f}$" if epsilon is not None else ""
     return (f"${qty}${suffix} — "
-            f"{_particle_tex(particle)},  "
             f"$x = {x:.2f}$,  $Q^2 = {q2:.1f}$ GeV$^2${eps}")
 
 
 def _ylabel(qty: str, target: str | None, diff_ref: str | None) -> str:
-    """Build y-axis label from the quantity symbol and optional subscripts."""
     if diff_ref is None:
         return f"${qty}$"
     return (rf"${qty}|_{{\rm {target}}}"
@@ -140,7 +136,7 @@ def _ylabel(qty: str, target: str | None, diff_ref: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 def _compute_diff(df: pd.DataFrame, reference: str) -> pd.DataFrame:
-    """Subtract reference-target values from every other target."""
+    """Subtract reference-target values from every other target (all particles)."""
     ref = (df[df["target"] == reference]
            .rename(columns={"asym": "_ref", "asym_err": "_ref_err"})
            [["particle", "z", "histogram", "_ref", "_ref_err"]])
@@ -154,26 +150,21 @@ def _compute_diff(df: pd.DataFrame, reference: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Grid figure
+# Grid figure  (both particles overlaid)
 # ---------------------------------------------------------------------------
 
 def _fig_grid(
     df:       pd.DataFrame,
-    particle: str,
     targets:  list[str],
     bins:     pd.DataFrame,
     suptitle: str,
     qty:      str = _QTY_A,
     diff_ref: str | None = None,
     ylim:     tuple[float, float] | None = None,
-    fmt:      str = "bs",
 ) -> plt.Figure:
     """
-    Grid of panels: rows = targets, cols = p_T bins.
-    All panels share x- and y-axes; no gap between columns or rows.
-
-    qty      : LaTeX quantity symbol (without outer $) used to build labels.
-    diff_ref : when set, each left-column panel gets a per-row difference label.
+    Grid: rows = targets, cols = p_T bins.
+    Both π⁺ and π⁻ are overlaid per panel with distinct colour/marker.
     """
     n_rows = len(targets)
     n_cols = len(bins)
@@ -195,17 +186,17 @@ def _fig_grid(
             ax      = axes[r, c]
             is_left = (c == 0)
 
-            grp = (df[(df["target"]    == target)
-                      & (df["histogram"] == brow.histogram)]
-                   .sort_values("z"))
-
-            if grp.empty:
-                ax.text(0.5, 0.5, "no data", transform=ax.transAxes,
-                        ha="center", va="center", fontsize=8, color="gray")
-            else:
+            for particle, style in _PARTICLE_STYLES.items():
+                grp = (df[(df["target"]    == target)
+                          & (df["particle"]   == particle)
+                          & (df["histogram"]  == brow.histogram)]
+                       .sort_values("z"))
+                if grp.empty:
+                    continue
                 ax.errorbar(
                     grp["z"], grp["asym"], yerr=grp["asym_err"],
-                    fmt=fmt, capsize=3, markersize=4, elinewidth=1.0, lw=0,
+                    fmt=style["marker"], color=style["color"],
+                    capsize=3, markersize=4, elinewidth=1.0, lw=0,
                 )
 
             ax.axhline(0, color="gray", lw=0.8, ls="--", zorder=0)
@@ -213,32 +204,39 @@ def _fig_grid(
             if ylim is not None:
                 ax.set_ylim(*ylim)
 
-            # target label — top-right corner of every panel
+            # target label — top-right corner
             ax.text(0.97, 0.95, target,
                     transform=ax.transAxes, va="top", ha="right",
                     fontsize=9, fontweight="bold")
 
-            # p_T bin label — inside top-left of top-row panels
+            # p_T bin label — top-left of top-row panels
             if is_top:
                 ax.text(0.05, 0.95,
                         f"$\\langle P_T \\rangle = {brow.bin_center:.2f}$ GeV/$c$",
                         transform=ax.transAxes, va="top", ha="left", fontsize=9)
 
             if is_left:
-                ax.set_ylabel(
-                    _ylabel(qty, target, diff_ref), fontsize=8,
-                )
+                ax.set_ylabel(_ylabel(qty, target, diff_ref), fontsize=8)
 
             if is_bottom:
                 ax.set_xlabel("$z$", fontsize=10)
 
             _ax_style(ax, xlabel=is_bottom, ylabel=is_left)
 
+    # legend — bottom-left corner of the top-left panel
+    handles = [
+        Line2D([], [], marker=st["marker"], color=st["color"],
+               ls="", markersize=5, label=st["label"])
+        for st in _PARTICLE_STYLES.values()
+    ]
+    axes[0, 0].legend(handles=handles, loc="lower left",
+                      fontsize=8, framealpha=0.7)
+
     return fig
 
 
 # ---------------------------------------------------------------------------
-# Helper: emit one pair of pages (comparison + diff) for a given DataFrame
+# Helper: emit comparison + difference pages for one observable
 # ---------------------------------------------------------------------------
 
 def _emit_pages(
@@ -252,46 +250,28 @@ def _emit_pages(
     qty:          str,
     ylim:         tuple | None,
     ylim_diff:    tuple | None,
-    fmt_comp:     str,
-    fmt_diff:     str,
     epsilon:      float | None = None,
 ) -> int:
-    """Write comparison + difference pages for one observable. Returns page count."""
+    """Write one comparison page + one difference page. Returns page count."""
     n = 0
-    for particle in ("pip", "pim"):
-        col  = _PARTICLE_COL[particle]
-        df_p = df_all[df_all["particle"] == col]
-        if df_p.empty:
-            continue
-        tgts = [t for t in targets if t in df_p["target"].values]
 
-        title = _page_suptitle(df_p, particle, qty, epsilon=epsilon)
-        fig   = _fig_grid(df_p, particle, tgts, bins, title,
-                          qty=qty, ylim=ylim, fmt=fmt_comp)
+    # ── comparison ───────────────────────────────────────────────────────────
+    title = _page_suptitle(df_all, qty, epsilon=epsilon)
+    fig   = _fig_grid(df_all, targets, bins, title, qty=qty, ylim=ylim)
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+    n += 1
+
+    # ── difference ───────────────────────────────────────────────────────────
+    if has_diff:
+        df_diff = _compute_diff(df_all, reference)
+        title   = _page_suptitle(df_all, qty,
+                                 suffix=rf" $-$ {reference}", epsilon=epsilon)
+        fig     = _fig_grid(df_diff, diff_targets, bins, title,
+                            qty=qty, diff_ref=reference, ylim=ylim_diff)
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
         n += 1
-
-    if has_diff:
-        for particle in ("pip", "pim"):
-            col   = _PARTICLE_COL[particle]
-            df_p  = df_all[df_all["particle"] == col]
-            if df_p.empty:
-                continue
-            dtgts = [t for t in diff_targets if t in df_p["target"].values]
-            if not dtgts:
-                continue
-
-            df_diff = _compute_diff(df_p, reference)
-            title   = _page_suptitle(df_p, particle, qty,
-                                     suffix=rf" $-$ {reference}",
-                                     epsilon=epsilon)
-            fig     = _fig_grid(df_diff, particle, dtgts, bins, title,
-                                qty=qty, diff_ref=reference,
-                                ylim=ylim_diff, fmt=fmt_diff)
-            pdf.savefig(fig, bbox_inches="tight")
-            plt.close(fig)
-            n += 1
 
     return n
 
@@ -321,11 +301,11 @@ def main() -> None:
     # ── A_LU ylim ────────────────────────────────────────────────────────────
     parser.add_argument(
         "--ylim", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
-        help="Y range for A_LU comparison pages",
+        help="Y range for A_LU comparison page",
     )
     parser.add_argument(
         "--ylim-diff", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
-        help="Y range for A_LU difference pages",
+        help="Y range for A_LU difference page",
     )
     # ── F_LU/F_UU ────────────────────────────────────────────────────────────
     parser.add_argument(
@@ -334,11 +314,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--ylim-flu", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
-        help="Y range for F_LU/F_UU comparison pages",
+        help="Y range for F_LU/F_UU comparison page",
     )
     parser.add_argument(
         "--ylim-flu-diff", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
-        help="Y range for F_LU/F_UU difference pages",
+        help="Y range for F_LU/F_UU difference page",
     )
     # ── output ───────────────────────────────────────────────────────────────
     parser.add_argument(
@@ -375,12 +355,10 @@ def main() -> None:
         # ── A_LU^sinφ pages ──────────────────────────────────────────────────
         n_pages += _emit_pages(
             pdf, df_all, targets, diff_targets, bins, has_diff,
-            reference  = args.reference,
-            qty        = _QTY_A,
-            ylim       = ylim,
-            ylim_diff  = ylim_diff,
-            fmt_comp   = "bs",
-            fmt_diff   = "rs",
+            reference = args.reference,
+            qty       = _QTY_A,
+            ylim      = ylim,
+            ylim_diff = ylim_diff,
         )
 
         # ── F_LU^sinφ / F_UU pages (only when --epsilon is given) ────────────
@@ -388,13 +366,11 @@ def main() -> None:
             df_flu = _to_flu_fuu(df_all, args.epsilon)
             n_pages += _emit_pages(
                 pdf, df_flu, targets, diff_targets, bins, has_diff,
-                reference  = args.reference,
-                qty        = _QTY_F,
-                ylim       = ylim_flu,
-                ylim_diff  = ylim_flu_diff,
-                fmt_comp   = "bs",
-                fmt_diff   = "rs",
-                epsilon    = args.epsilon,
+                reference = args.reference,
+                qty       = _QTY_F,
+                ylim      = ylim_flu,
+                ylim_diff = ylim_flu_diff,
+                epsilon   = args.epsilon,
             )
 
     print(f"Saved: {out}  ({n_pages} pages)")
