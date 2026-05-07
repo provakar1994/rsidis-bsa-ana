@@ -1,11 +1,11 @@
 # ============================================================
-# RSIDIS SSA base configuration — C, PI+SIDIS
-# Kinematic point: e=10.6716, x=0.25, Q2=3.3, z=0.5
+# RSIDIS SSA base configuration — Cu, PI-SIDIS
+# Kinematic point: e=10.6716, x=0.25, Q2=3.3, z=0.9
 #
 # THIS FILE IS A BASE — do not pass it directly to analysis.py.
 # Use a daughter YAML that specifies _base and overrides thpq:
 #
-#   _base: C_pip_e10p7_x0p25_q23p3_z0p5_base.yaml
+#   _base: Cu_pim_e10p7_x0p25_q23p3_z0p9_base.yaml
 #   setting:
 #     thpq: <value>
 # ============================================================
@@ -14,11 +14,11 @@ setting:
   ebeam:    10.6716
   x:        0.25
   Q2:       3.3
-  z:        0.5
+  z:        0.9
   thpq:     0.0        # placeholder — must be overridden in daughter
-  run_type: PI+SIDIS
+  run_type: PI-SIDIS
 
-target: C
+target: Cu
 run_period: period_1
 do_eplus_subtraction: true
 do_dummy_subtraction: false

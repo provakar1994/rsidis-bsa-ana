@@ -106,6 +106,8 @@ class RunWeight:
     boil_corr:    float   # boiling correction (1.0 for non-cryo)
     eff_scale:    float   # ps_factor * boil_corr / (h_esing_eff * p_hadron_eff * livetime)
                           # charge-independent; use for multi-run filling
+    charge_hp:    float = 0.0   # helicity-plus beam charge [mC]  (= charge/2 when not helicity-gated)
+    charge_hm:    float = 0.0   # helicity-minus beam charge [mC] (= charge/2 when not helicity-gated)
 
     @property
     def norm_factor(self) -> float:
@@ -148,6 +150,8 @@ class WeightTableResult:
     excluded:  list[RunExclusion]      = field(default_factory=list)
     Q_tot:     float                   = 0.0
     Q_eff_tot: float                   = 0.0
+    Q_hp_tot:  float                   = 0.0   # Σ charge_hp [mC]; = Q_tot/2 when not helicity-gated
+    Q_hm_tot:  float                   = 0.0   # Σ charge_hm [mC]; = Q_tot/2 when not helicity-gated
 
     @property
     def n_valid(self) -> int:
@@ -162,6 +166,8 @@ class WeightTableResult:
             f"Runs accepted : {self.n_valid}",
             f"Runs excluded : {self.n_excluded}",
             f"Q_tot         : {self.Q_tot:.3f} mC",
+            f"Q_hp_tot      : {self.Q_hp_tot:.3f} mC",
+            f"Q_hm_tot      : {self.Q_hm_tot:.3f} mC",
         ]
         if self.excluded:
             lines.append("")
@@ -221,10 +227,15 @@ def get_prescale_factor(row: pd.Series) -> float:
 # Single-run weight
 # ---------------------------------------------------------------------------
 
+_UC_TO_MC = 1e-3   # helicity charge columns are stored in μC; convert to mC
+
+
 def compute_run_weight(
     row: pd.Series,
     charge_column: str = "BCM2_Q",
     apply_boil_corr: bool = False,
+    charge_hp_column: str | None = None,
+    charge_hm_column: str | None = None,
 ) -> RunWeight:
     """
     Compute the per-event normalization weight for one runlist row.
@@ -237,6 +248,12 @@ def compute_run_weight(
         Name of the runlist column to use for beam charge normalization.
     apply_boil_corr : bool
         Pass True for LH2 / LD2 targets.
+    charge_hp_column : str or None
+        Runlist column for helicity-plus beam charge [μC].  When provided the
+        value is converted to mC (÷ 1000) and stored in RunWeight.charge_hp.
+        When None, charge_hp defaults to charge / 2 (ratio = 1 assumption).
+    charge_hm_column : str or None
+        Runlist column for helicity-minus beam charge [μC].  Same as above.
 
     Returns
     -------
@@ -288,6 +305,38 @@ def compute_run_weight(
     else:
         boil = 1.0
 
+    # ---- helicity-gated charges (μC → mC) ----
+    # Columns are in μC; multiply by _UC_TO_MC to convert to mC.
+    # Each helicity charge must be positive and must not exceed the total
+    # charge (with 20% tolerance for BCM calibration differences).
+    _MAX_HC_RATIO = 1.2
+
+    if charge_hp_column is not None:
+        raw_hp = row[charge_hp_column]
+        _check(raw_hp, charge_hp_column,
+               pd.notna(raw_hp) and float(raw_hp) > 0,
+               f"= {raw_hp!r} must be > 0 (sentinel -999 means not available)")
+        charge_hp = float(raw_hp) * _UC_TO_MC
+        _check(charge_hp, charge_hp_column,
+               charge_hp <= charge * _MAX_HC_RATIO,
+               f"= {charge_hp:.4f} mC exceeds {_MAX_HC_RATIO}× total charge "
+               f"({charge:.4f} mC) — check BCM calibration")
+    else:
+        charge_hp = charge / 2.0
+
+    if charge_hm_column is not None:
+        raw_hm = row[charge_hm_column]
+        _check(raw_hm, charge_hm_column,
+               pd.notna(raw_hm) and float(raw_hm) > 0,
+               f"= {raw_hm!r} must be > 0 (sentinel -999 means not available)")
+        charge_hm = float(raw_hm) * _UC_TO_MC
+        _check(charge_hm, charge_hm_column,
+               charge_hm <= charge * _MAX_HC_RATIO,
+               f"= {charge_hm:.4f} mC exceeds {_MAX_HC_RATIO}× total charge "
+               f"({charge:.4f} mC) — check BCM calibration")
+    else:
+        charge_hm = charge / 2.0
+
     # ---- assemble weight and eff_scale ----
     # eff_scale = ps_factor * boil / (h_eff × p_eff × livetime)  — charge-independent
     # weight    = eff_scale / charge                              — kept for single-run QA
@@ -306,6 +355,8 @@ def compute_run_weight(
         livetime=livetime,
         boil_corr=boil,
         eff_scale=eff_scale,
+        charge_hp=charge_hp,
+        charge_hm=charge_hm,
     )
 
 
@@ -318,6 +369,9 @@ def build_weight_table(
     charge_column: str = "BCM2_Q",
     apply_boil_corr: bool = False,
     log_path: str | Path | None = None,
+    use_helicity_gated_charge: bool = False,
+    charge_hp_column: str = "BCM2_Q_hp",
+    charge_hm_column: str = "BCM2_Q_hm",
 ) -> WeightTableResult:
     """
     Compute per-event weights for every run in *df_runs*.
@@ -339,6 +393,14 @@ def build_weight_table(
         If given, write a human-readable exclusion log to this file.
         The file is created (or overwritten) regardless of whether any
         runs were excluded — an empty exclusion section signals a clean run.
+    use_helicity_gated_charge : bool
+        When True, read *charge_hp_column* and *charge_hm_column* per run
+        and accumulate Q_hp_tot / Q_hm_tot.  Runs with invalid helicity
+        charges are excluded.  When False, Q_hp_tot = Q_hm_tot = Q_tot / 2.
+    charge_hp_column : str
+        Runlist column for helicity-plus charge [μC].
+    charge_hm_column : str
+        Runlist column for helicity-minus charge [μC].
 
     Returns
     -------
@@ -346,12 +408,17 @@ def build_weight_table(
     """
     result = WeightTableResult()
 
+    hp_col = charge_hp_column if use_helicity_gated_charge else None
+    hm_col = charge_hm_column if use_helicity_gated_charge else None
+
     for _, row in df_runs.iterrows():
         try:
             rw = compute_run_weight(
                 row,
                 charge_column=charge_column,
                 apply_boil_corr=apply_boil_corr,
+                charge_hp_column=hp_col,
+                charge_hm_column=hm_col,
             )
             result.weights[rw.run] = rw
         except NormalizationError as exc:
@@ -359,8 +426,15 @@ def build_weight_table(
             result.excluded.append(excl)
             logger.warning("Excluded run %d (%s): %s", exc.run, exc.column, exc)
 
-    result.Q_tot     = sum(rw.charge       for rw in result.weights.values())
-    result.Q_eff_tot = sum(rw.norm_factor  for rw in result.weights.values())
+    result.Q_tot     = sum(rw.charge      for rw in result.weights.values())
+    result.Q_eff_tot = sum(rw.norm_factor for rw in result.weights.values())
+
+    if use_helicity_gated_charge:
+        result.Q_hp_tot = sum(rw.charge_hp for rw in result.weights.values())
+        result.Q_hm_tot = sum(rw.charge_hm for rw in result.weights.values())
+    else:
+        result.Q_hp_tot = result.Q_tot / 2.0
+        result.Q_hm_tot = result.Q_tot / 2.0
 
     if result.excluded:
         logger.warning(
@@ -375,6 +449,7 @@ def build_weight_table(
             Path(log_path),
             apply_boil_corr=apply_boil_corr,
             charge_column=charge_column,
+            use_helicity_gated_charge=use_helicity_gated_charge,
         )
 
     return result
@@ -389,6 +464,7 @@ def _write_log(
     log_path: Path,
     apply_boil_corr: bool,
     charge_column: str,
+    use_helicity_gated_charge: bool = False,
 ) -> None:
     """Write a structured plain-text log of the weight-table build."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -398,27 +474,42 @@ def _write_log(
         fh.write("=" * 72 + "\n")
         fh.write("  RSIDIS SSA — normalization weight table build log\n")
         fh.write(f"  Generated : {timestamp}\n")
-        fh.write(f"  apply_boil_corr = {apply_boil_corr}\n")
+        fh.write(f"  apply_boil_corr            = {apply_boil_corr}\n")
+        fh.write(f"  use_helicity_gated_charge  = {use_helicity_gated_charge}\n")
         fh.write("=" * 72 + "\n\n")
 
         fh.write(f"Runs accepted : {result.n_valid}\n")
         fh.write(f"Runs excluded : {result.n_excluded}\n")
-        fh.write(f"Q_tot         : {result.Q_tot:.3f} mC\n\n")
+        fh.write(f"Q_tot         : {result.Q_tot:.3f} mC\n")
+        fh.write(f"Q_hp_tot      : {result.Q_hp_tot:.3f} mC")
+        if not use_helicity_gated_charge:
+            fh.write("  (= Q_tot/2, helicity-gated charge not enabled)")
+        fh.write("\n")
+        fh.write(f"Q_hm_tot      : {result.Q_hm_tot:.3f} mC")
+        if not use_helicity_gated_charge:
+            fh.write("  (= Q_tot/2, helicity-gated charge not enabled)")
+        fh.write("\n\n")
 
         if result.n_valid:
             fh.write("--- Accepted runs ---\n")
-            fh.write(f"  {'run':>8}  {'weight':>14}  {'eff_scale':>14}  {charge_column:>10}  "
-                     f"{'h_eff':>8}  {'p_eff':>8}  {'livetime':>10}  "
-                     f"{'boil_corr':>10}  {'ps':>4}\n")
-            fh.write("  " + "-" * 95 + "\n")
+            hdr = (f"  {'run':>8}  {'weight':>14}  {'eff_scale':>14}  {charge_column:>10}  "
+                   f"{'h_eff':>8}  {'p_eff':>8}  {'livetime':>10}  "
+                   f"{'boil_corr':>10}  {'ps':>4}")
+            if use_helicity_gated_charge:
+                hdr += f"  {'Q_hp(mC)':>10}  {'Q_hm(mC)':>10}"
+            fh.write(hdr + "\n")
+            fh.write("  " + "-" * (95 + (24 if use_helicity_gated_charge else 0)) + "\n")
             for rw in sorted(result.weights.values(), key=lambda r: r.run):
-                fh.write(
+                line = (
                     f"  {rw.run:>8}  {rw.weight:>14.6e}  {rw.eff_scale:>14.6e}  "
                     f"{rw.charge:>10.3f}  "
                     f"{rw.h_esing_eff:>8.5f}  {rw.p_hadron_eff:>8.5f}  "
                     f"{rw.livetime:>10.6f}  {rw.boil_corr:>10.6f}  "
-                    f"{rw.ps_factor:>4.1f}\n"
+                    f"{rw.ps_factor:>4.1f}"
                 )
+                if use_helicity_gated_charge:
+                    line += f"  {rw.charge_hp:>10.4f}  {rw.charge_hm:>10.4f}"
+                fh.write(line + "\n")
 
         if result.n_excluded:
             fh.write("\n--- Excluded runs ---\n")
@@ -451,6 +542,8 @@ def weight_table_to_df(weights: dict[int, RunWeight]) -> pd.DataFrame:
             "norm_factor":   rw.norm_factor,
             "eff_scale":     rw.eff_scale,
             "BCM2_Q":        rw.charge,
+            "charge_hp":     rw.charge_hp,
+            "charge_hm":     rw.charge_hm,
             "h_esing_Eff":   rw.h_esing_eff,
             "p_hadron_Eff":  rw.p_hadron_eff,
             "ps_factor":     rw.ps_factor,

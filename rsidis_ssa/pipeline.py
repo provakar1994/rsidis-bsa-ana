@@ -343,6 +343,8 @@ def _fill_run_type(
             "IHWP":               ihwp,
             # Normalization component breakdown (from RunWeight)
             "charge":             rw.charge,
+            "charge_hp":          rw.charge_hp,
+            "charge_hm":          rw.charge_hm,
             "h_esing_eff":        rw.h_esing_eff,
             "p_hadron_eff":       rw.p_hadron_eff,
             "ps_factor":          rw.ps_factor,
@@ -364,6 +366,8 @@ def _fill_run_type(
     # eff_corrected_counts:  fill_w=eff_scale, divide by Q_tot    (raw charge sum)
     # eff_corrected_charge:  fill_w=1,         divide by Q_eff_tot (efficiency-corrected charge)
     # charge_only:           fill_w=1,         divide by Q_tot    (no efficiency correction)
+    # When use_helicity_gated_charge=True, _hplus/_hminus histograms are divided
+    # by Q_hp_tot / Q_hm_tot instead of the common q_denom.
     scheme = cfg.normalization.weight_scheme
     if scheme in ("eff_corrected_counts", "charge_only"):
         q_denom = wt_result.Q_tot
@@ -376,13 +380,31 @@ def _fill_run_type(
             f"[{label}] {q_denom_label} — no valid charge accumulated. "
             "Check that at least one run passed normalization validation."
         )
-    scale = 1.0 / q_denom
-    for h in real_reg.values():
-        h *= scale
-    for h in random_reg.values():
-        h *= scale
-    logger.debug("[%s] divided histograms by %s  (scheme: %s)",
-                 label, q_denom_label, scheme)
+
+    if cfg.normalization.use_helicity_gated_charge:
+        q_hp = wt_result.Q_hp_tot
+        q_hm = wt_result.Q_hm_tot
+        for reg in (real_reg, random_reg):
+            for key, h in reg.items():
+                if key.endswith("_hplus"):
+                    h *= 1.0 / q_hp
+                elif key.endswith("_hminus"):
+                    h *= 1.0 / q_hm
+                else:
+                    h *= 1.0 / q_denom
+        logger.debug(
+            "[%s] helicity-gated normalization: h+/Q_hp=%.3f mC, "
+            "h-/Q_hm=%.3f mC, inclusive/%s  (scheme: %s)",
+            label, q_hp, q_hm, q_denom_label, scheme,
+        )
+    else:
+        scale = 1.0 / q_denom
+        for h in real_reg.values():
+            h *= scale
+        for h in random_reg.values():
+            h *= scale
+        logger.debug("[%s] divided histograms by %s  (scheme: %s)",
+                     label, q_denom_label, scheme)
 
     # Build normyield comparison DataFrame and merge in CSV normyield + raw counts
     ny_df = pd.DataFrame(run_normyields)
@@ -593,6 +615,9 @@ def run_pipeline(
         df_signal,
         charge_column=charge_column,
         apply_boil_corr=cfg.apply_boil_corr,
+        use_helicity_gated_charge=cfg.normalization.use_helicity_gated_charge,
+        charge_hp_column=cfg.normalization.charge_hp_column,
+        charge_hm_column=cfg.normalization.charge_hm_column,
     )
 
     # e⁺ background runs
@@ -606,6 +631,9 @@ def run_pipeline(
             df_eplus,
             charge_column=charge_column,
             apply_boil_corr=cfg.apply_boil_corr,
+            use_helicity_gated_charge=cfg.normalization.use_helicity_gated_charge,
+            charge_hp_column=cfg.normalization.charge_hp_column,
+            charge_hm_column=cfg.normalization.charge_hm_column,
         )
 
     # Dummy runs
@@ -619,6 +647,9 @@ def run_pipeline(
             df_dummy,
             charge_column=charge_column,
             apply_boil_corr=False,
+            use_helicity_gated_charge=cfg.normalization.use_helicity_gated_charge,
+            charge_hp_column=cfg.normalization.charge_hp_column,
+            charge_hm_column=cfg.normalization.charge_hm_column,
         )
 
     # ---- dummy scale ----

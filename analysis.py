@@ -520,27 +520,37 @@ def _plot_ctmean_vs_run(ax, result: PipelineResult) -> None:
 
 def _page_helicity(pdf: PdfPages, result: PipelineResult) -> None:
     """
-    2×2 helicity diagnostic page (signal runs only):
+    3×2 helicity diagnostic page (signal runs only):
 
-    Top-left  : raw T_helicity_hel distribution (two bars: +1 and −1)
-    Top-right : IHWP state (IN/OUT) vs run number
-    Bottom-left : h+ vs h− effective event counts per run (grouped bar)
-    Bottom-right: h+ / h− ratio per run with reference line at 1
+    Row 1: raw T_helicity_hel distribution | IHWP state vs run
+    Row 2: h+ vs h− event counts per run   | n_h+ / n_h− ratio
+    Row 3: Q_hp vs Q_hm charge per run     | Q_hp / Q_hm ratio
+           (charge/2 for each when use_helicity_gated_charge=False)
     """
     ny = result.normyield_per_run.get("signal")
     raw_hel = result.raw_helicity.get("signal")
     if ny is None or ny.empty:
         return
 
+    use_hel_charge = result.cfg.normalization.use_helicity_gated_charge
+
     ny = ny.sort_values("run").reset_index(drop=True)
     runs = ny["run"].astype(str).tolist()
     x    = np.arange(len(ny))
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle("Helicity & IHWP diagnostics  (signal runs)", fontsize=11, fontweight="bold")
-    ax_rawh, ax_ihwp, ax_split, ax_ratio = axes.flat
+    fig, axes = plt.subplots(3, 2, figsize=(12, 12))
+    hel_charge_note = ("helicity-gated charge active"
+                       if use_hel_charge else "helicity-gated charge inactive")
+    fig.suptitle(f"Helicity & IHWP diagnostics  (signal runs)  [{hel_charge_note}]",
+                 fontsize=11, fontweight="bold")
+    ax_rawh  = axes[0, 0]
+    ax_ihwp  = axes[0, 1]
+    ax_split = axes[1, 0]
+    ax_ratio = axes[1, 1]
+    ax_qsplit = axes[2, 0]
+    ax_qratio = axes[2, 1]
 
-    # ── Top-left: raw helicity distribution ──────────────────────────────────
+    # ── Row 1 left: raw helicity distribution ────────────────────────────────
     if raw_hel is not None and len(raw_hel) > 0:
         unique_vals = np.unique(raw_hel)
         counts      = [int((raw_hel == v).sum()) for v in unique_vals]
@@ -559,7 +569,7 @@ def _page_helicity(pdf: PdfPages, result: PipelineResult) -> None:
                      ha="center", va="center")
         ax_rawh.set_title("Raw helicity distribution")
 
-    # ── Top-right: IHWP state vs run number ──────────────────────────────────
+    # ── Row 1 right: IHWP state vs run number ────────────────────────────────
     ihwp_vals  = ny["IHWP"].str.upper() if "IHWP" in ny.columns else pd.Series(["?"] * len(ny))
     bar_colors = ["steelblue" if s == "OUT" else "tomato" for s in ihwp_vals]
     ax_ihwp.bar(x, 1, color=bar_colors, edgecolor="black", linewidth=0.5, width=0.7)
@@ -579,7 +589,7 @@ def _page_helicity(pdf: PdfPages, result: PipelineResult) -> None:
         ax_ihwp.text(xi, 0.5, state, ha="center", va="center",
                      fontsize=7, fontweight="bold", color="white")
 
-    # ── Bottom-left: h+ vs h− counts per run ─────────────────────────────────
+    # ── Row 2 left: h+ vs h− counts per run ──────────────────────────────────
     if "n_hplus" in ny.columns and "n_hminus" in ny.columns:
         ax_split.bar(x - 0.2, ny["n_hplus"],  0.4, label="h+",
                      color="steelblue", edgecolor="black", linewidth=0.5)
@@ -595,7 +605,7 @@ def _page_helicity(pdf: PdfPages, result: PipelineResult) -> None:
                       transform=ax_split.transAxes, ha="center", va="center")
         ax_split.set_title("h+ / h− counts per run")
 
-    # ── Bottom-right: h+ / h− ratio per run ──────────────────────────────────
+    # ── Row 2 right: h+ / h− count ratio per run ─────────────────────────────
     if "n_hplus" in ny.columns and "n_hminus" in ny.columns:
         denom = ny["n_hminus"].replace(0, np.nan)
         ratio = ny["n_hplus"] / denom
@@ -604,8 +614,7 @@ def _page_helicity(pdf: PdfPages, result: PipelineResult) -> None:
         ax_ratio.set_xticks(x)
         ax_ratio.set_xticklabels(runs, rotation=45, ha="right", fontsize=7)
         ax_ratio.set_ylabel("n_h+ / n_h−")
-        ax_ratio.set_title("Helicity balance per run")
-        # Annotate global ratio
+        ax_ratio.set_title("Event count helicity balance per run")
         n_hp_tot = int(ny["n_hplus"].sum())
         n_hm_tot = int(ny["n_hminus"].sum())
         global_ratio = n_hp_tot / n_hm_tot if n_hm_tot > 0 else float("nan")
@@ -618,7 +627,50 @@ def _page_helicity(pdf: PdfPages, result: PipelineResult) -> None:
     else:
         ax_ratio.text(0.5, 0.5, "n_hplus/n_hminus not available",
                       transform=ax_ratio.transAxes, ha="center", va="center")
-        ax_ratio.set_title("Helicity balance per run")
+        ax_ratio.set_title("Event count helicity balance per run")
+
+    # ── Row 3 left: Q_hp vs Q_hm charge per run ──────────────────────────────
+    if "charge_hp" in ny.columns and "charge_hm" in ny.columns:
+        ax_qsplit.bar(x - 0.2, ny["charge_hp"], 0.4, label="Q_h+",
+                      color="steelblue", edgecolor="black", linewidth=0.5)
+        ax_qsplit.bar(x + 0.2, ny["charge_hm"], 0.4, label="Q_h−",
+                      color="tomato",    edgecolor="black", linewidth=0.5)
+        ax_qsplit.set_xticks(x)
+        ax_qsplit.set_xticklabels(runs, rotation=45, ha="right", fontsize=7)
+        ax_qsplit.set_ylabel("Charge [mC]")
+        note = "" if use_hel_charge else "  (= Q_tot/2, flag disabled)"
+        ax_qsplit.set_title(f"Helicity-gated charge per run{note}")
+        ax_qsplit.legend(fontsize=8)
+    else:
+        ax_qsplit.text(0.5, 0.5, "charge_hp/charge_hm not available",
+                       transform=ax_qsplit.transAxes, ha="center", va="center")
+        ax_qsplit.set_title("Helicity-gated charge per run")
+
+    # ── Row 3 right: Q_hp / Q_hm ratio per run ───────────────────────────────
+    if "charge_hp" in ny.columns and "charge_hm" in ny.columns:
+        q_denom = ny["charge_hm"].replace(0, np.nan)
+        q_ratio = ny["charge_hp"] / q_denom
+        ax_qratio.axhline(1.0, color="gray", ls="--", lw=0.9, zorder=1)
+        ax_qratio.plot(x, q_ratio, "o-", color="darkorange", ms=6, lw=1.2, zorder=3)
+        ax_qratio.set_xticks(x)
+        ax_qratio.set_xticklabels(runs, rotation=45, ha="right", fontsize=7)
+        ax_qratio.set_ylabel("Q_h+ / Q_h−")
+        note = "" if use_hel_charge else "  (= 1 by construction, flag disabled)"
+        ax_qratio.set_title(f"Charge helicity balance per run{note}")
+        q_hp_tot = ny["charge_hp"].sum()
+        q_hm_tot = ny["charge_hm"].sum()
+        global_q_ratio = q_hp_tot / q_hm_tot if q_hm_tot > 0 else float("nan")
+        ax_qratio.text(0.97, 0.97,
+                       f"Total Q_h+ = {q_hp_tot:.3f} mC\n"
+                       f"Total Q_h− = {q_hm_tot:.3f} mC\n"
+                       f"Global ratio = {global_q_ratio:.4f}",
+                       transform=ax_qratio.transAxes, va="top", ha="right",
+                       fontsize=8, family="monospace",
+                       bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
+    else:
+        ax_qratio.text(0.5, 0.5, "charge_hp/charge_hm not available",
+                       transform=ax_qratio.transAxes, ha="center", va="center")
+        ax_qratio.set_title("Charge helicity balance per run")
 
     fig.tight_layout()
     pdf.savefig(fig)

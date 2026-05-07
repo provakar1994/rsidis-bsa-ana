@@ -162,6 +162,26 @@ class NormalizationConfig(BaseModel):
         corrections.
     """
 
+    use_helicity_gated_charge: bool = False
+    """
+    When True, helicity-split histograms (``_hplus`` / ``_hminus``) are
+    divided by the per-helicity beam charges ``Q_hp_tot`` / ``Q_hm_tot``
+    instead of the common ``Q_tot`` (or ``Q_eff_tot``).  Inclusive
+    histograms are unaffected and still use the scheme-based denominator.
+    Applies to all ``weight_scheme`` choices.
+
+    When False (default) all histograms share the same denominator,
+    equivalent to assuming equal helicity-state charges (ratio = 1).
+    """
+
+    charge_hp_column: str = "BCM2_Q_hp"
+    """Runlist column for helicity-plus beam charge [μC].
+    Only read when ``use_helicity_gated_charge = True``."""
+
+    charge_hm_column: str = "BCM2_Q_hm"
+    """Runlist column for helicity-minus beam charge [μC].
+    Only read when ``use_helicity_gated_charge = True``."""
+
 
 # Coincidence-time center: either the string 'auto' (use ctmean from CSV)
 # or a fixed float in nanoseconds.

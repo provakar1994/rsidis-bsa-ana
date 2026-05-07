@@ -1,11 +1,11 @@
 # ============================================================
-# RSIDIS SSA base configuration — C, PI+SIDIS
+# RSIDIS SSA base configuration — LD2, PI+SIDIS
 # Kinematic point: e=10.6716, x=0.25, Q2=3.3, z=0.5
 #
 # THIS FILE IS A BASE — do not pass it directly to analysis.py.
 # Use a daughter YAML that specifies _base and overrides thpq:
 #
-#   _base: C_pip_e10p7_x0p25_q23p3_z0p5_base.yaml
+#   _base: LD2_pip_e10p7_x0p25_q23p3_z0p5_base.yaml
 #   setting:
 #     thpq: <value>
 # ============================================================
@@ -18,10 +18,10 @@ setting:
   thpq:     0.0        # placeholder — must be overridden in daughter
   run_type: PI+SIDIS
 
-target: C
+target: LD2
 run_period: period_1
 do_eplus_subtraction: true
-do_dummy_subtraction: false
+do_dummy_subtraction: true
 
 runs_include: null
 runs_exclude: []
