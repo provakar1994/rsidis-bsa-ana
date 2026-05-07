@@ -378,3 +378,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Example command lines:
+# x = 0.25, Q² = 3.3 GeV²:
+#  python plot_target_dependence.py --epsilon 0.59 \
+#     --ylim -0.062 0.122 --ylim-diff -0.09 0.12 \
+#     --ylim-flu -0.082 0.182 --ylim-flu-diff -0.12 0.18
