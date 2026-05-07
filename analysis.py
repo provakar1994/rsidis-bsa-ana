@@ -1470,37 +1470,219 @@ def _page_binned_summary(
 # Last page: statistics table
 # ---------------------------------------------------------------------------
 
+def _style_table(
+    tbl,
+    header_color: str = "#c8ddf0",
+    fontsize: int = 8,
+    pull_cols: list[int] | None = None,
+    pull_data: list[list[str]] | None = None,
+    pull_warn: float = 5.0,
+) -> None:
+    """Apply consistent styling to a matplotlib Table.
+    Optionally highlights pull columns where |pull| > pull_warn in light red.
+    """
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(fontsize)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("0.75")
+        cell.set_linewidth(0.4)
+        if r == 0:
+            cell.set_facecolor(header_color)
+            cell.set_text_props(fontweight="bold")
+        else:
+            cell.set_facecolor("#f5f5f5" if r % 2 == 1 else "#ffffff")
+    # Highlight large pulls
+    if pull_cols and pull_data:
+        for ri, row in enumerate(pull_data):
+            for ci in pull_cols:
+                if ci < len(row):
+                    try:
+                        if float(row[ci]) > pull_warn:
+                            tbl[ri + 1, ci].set_facecolor("#ffdddd")
+                    except (ValueError, TypeError):
+                        pass
+
+
 def _page_statistics(
     pdf: PdfPages,
     result: PipelineResult,
     sub_results: list[SubtractionResult],
+    yaml_path: Path,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(11, max(4, 0.35 * len(sub_results) + 2)))
-    ax.axis("off")
-    fig.suptitle("Background subtraction statistics", fontsize=11, fontweight="bold")
+    from datetime import datetime as _dt
+    from collections import defaultdict as _defaultdict
 
-    # Weight table exclusion summary
-    lines = []
-    for label, wt in result.weight_tables.items():
-        lines.append(f"  {label:8s}  {wt.n_valid:4d} runs accepted"
-                     f"  {wt.n_excluded:3d} excluded (bad normalization)")
-        for ex in wt.excluded:
-            lines.append(f"             ↳ run {ex.run}  ({ex.column}): {ex.reason}")
+    cfg  = result.cfg
+    cuts = cfg.cuts
+    norm = cfg.normalization
+    st   = cfg.setting
 
-    for label, skips in result.file_skips.items():
-        if skips:
-            lines.append(f"  {label:8s}  {len(skips)} ROOT file(s) not found: "
-                         + ", ".join(str(r) for r in sorted(skips)))
+    # ── Subtraction pivot: pivot[hname][step] = (sub_pct, max_pull) ──────
+    steps_present: list[str] = list(dict.fromkeys(sr.label for sr in sub_results))
+    scale_by_step: dict[str, float] = {}
+    pivot: dict[str, dict[str, tuple[float, float]]] = _defaultdict(dict)
+    for sr in sub_results:
+        pivot[sr.histogram_name][sr.label] = (
+            sr.fraction_subtracted * 100.0,
+            sr.max_abs_pull,
+        )
+        scale_by_step.setdefault(sr.label, sr.scale)
+    hist_names: list[str] = list(dict.fromkeys(sr.histogram_name for sr in sub_results))
 
-    lines.append("")
-    lines.append(subtraction_summary(sub_results))
+    # ── Figure ─────────────────────────────────────────────────────────────
+    n_h = len(hist_names)
+    fig_h = max(9.0, 0.25 * n_h + 6.5)
+    fig = plt.figure(figsize=(14, fig_h))
+    gs  = fig.add_gridspec(
+        4, 1, hspace=0.27,
+        height_ratios=[0.5, 2.2, 1.5, max(3.0, 0.25 * n_h + 1.0)],
+    )
+    fig.suptitle("Run Summary", fontsize=12, fontweight="bold", y=0.995)
 
-    ax.text(0.02, 0.98, "\n".join(lines),
-            transform=ax.transAxes, va="top", ha="left",
-            fontsize=8, family="monospace",
-            bbox=dict(boxstyle="round", fc="0.96", ec="0.8"))
+    _HC = "#c8ddf0"   # header colour shared by all tables
+    _FS = 8           # base font size
 
-    fig.tight_layout()
+    # ── A: Header (config file + timestamp) ───────────────────────────────
+    ax0 = fig.add_subplot(gs[0])
+    ax0.axis("off")
+    ax0.text(0.0, 0.95, f"Config:    {yaml_path}",
+             transform=ax0.transAxes, fontsize=9, family="monospace", va="top")
+    ax0.text(0.0, 0.35, f"Generated  {_dt.now():%Y-%m-%d %H:%M}",
+             transform=ax0.transAxes, fontsize=8, color="0.45", va="top")
+
+    # ── B: Setting & Normalization ─────────────────────────────────────────
+    ax1 = fig.add_subplot(gs[1])
+    ax1.axis("off")
+    ax1.set_title("Setting & Normalization", loc="left",
+                  fontsize=9, fontweight="bold", pad=3)
+
+    # B3: per-run-type charge totals + exclusions (one row per run type).
+    # Built first so B2/B1 can be stacked above it without overlap.
+    b3_cols = ["run_type", "n_valid", "n_excl", "Q_tot [mC]",
+               "Q_hp [mC]", "Q_hm [mC]", "excluded runs"]
+    b3_rows = []
+    for lbl, wt in result.weight_tables.items():
+        excl_str = ("  ".join(f"{ex.run}({ex.column})" for ex in wt.excluded)
+                    or "—")
+        b3_rows.append([
+            lbl,
+            str(wt.n_valid),
+            str(wt.n_excluded),
+            f"{wt.Q_tot:.2f}",
+            f"{wt.Q_hp_tot:.2f}",
+            f"{wt.Q_hm_tot:.2f}",
+            excl_str,
+        ])
+    n_b3    = len(b3_rows)
+    b3_h    = 0.09 * (n_b3 + 1)   # ~0.09 per row (header + data)
+    b3_bot  = 0.02
+    tbl_b3  = ax1.table(cellText=b3_rows, colLabels=b3_cols,
+                        loc="upper center",
+                        bbox=[0, b3_bot, 1.0, b3_h])
+    _style_table(tbl_b3, _HC, _FS)
+
+    # B2: normalization scheme (1 data row) — placed above B3
+    b2_h    = 0.18
+    b2_bot  = b3_bot + b3_h + 0.04
+    b2_cols = ["weight_scheme", "charge_col", "heli_gated",
+               "hp_col", "hm_col"]
+    b2_rows = [[
+        norm.weight_scheme,
+        norm.charge_column,
+        "yes" if norm.use_helicity_gated_charge else "no",
+        norm.charge_hp_column if norm.use_helicity_gated_charge else "—",
+        norm.charge_hm_column if norm.use_helicity_gated_charge else "—",
+    ]]
+    tbl_b2  = ax1.table(cellText=b2_rows, colLabels=b2_cols,
+                        loc="upper center", bbox=[0, b2_bot, 0.65, b2_h])
+    _style_table(tbl_b2, _HC, _FS)
+
+    # B1: kinematic setting (1 data row) — placed above B2
+    b1_h    = 0.18
+    b1_bot  = b2_bot + b2_h + 0.04
+    b1_cols = ["target", "run_period", "ebeam [GeV]", "x", "Q² [GeV²]",
+               "z", "θpq [°]", "run type"]
+    b1_rows = [[
+        cfg.target, cfg.run_period,
+        f"{st.ebeam:.4f}", f"{st.x:.3f}", f"{st.Q2:.2f}",
+        f"{st.z:.2f}", f"{st.thpq:.2f}", st.run_type,
+    ]]
+    tbl_b1  = ax1.table(cellText=b1_rows, colLabels=b1_cols,
+                        loc="upper center", bbox=[0, b1_bot, 1.0, b1_h])
+    _style_table(tbl_b1, _HC, _FS)
+
+    # ── C: Cuts ────────────────────────────────────────────────────────────
+    ax2 = fig.add_subplot(gs[2])
+    ax2.axis("off")
+    ax2.set_title("Cuts", loc="left", fontsize=9, fontweight="bold", pad=3)
+
+    # C1: acceptance + PID (1 data row)
+    hgc_thr = (f"{cuts.phgc_p_threshold:.2f} GeV"
+               if cuts.phgc_p_threshold is not None else "unconditional")
+    c1_cols = ["HMS δ [%]", "SHMS δ [%]", "HCer NPE",
+               "SHSsum", "Aero NPE", "HGC NPE", "SHScal E/p", "HGC thr"]
+    c1_rows = [[
+        f"{cuts.hsdelta_lo:.1f} → {cuts.hsdelta_hi:.1f}",
+        f"{cuts.psdelta_lo:.1f} → {cuts.psdelta_hi:.1f}",
+        f"> {cuts.hcer_npe_min:.1f}",
+        f"> {cuts.hsshsum_min:.2f}",
+        f"> {cuts.paero_npe_min:.1f}",
+        f"> {cuts.phgc_npe_min:.1f}",
+        f"< {cuts.psshsum_max:.2f}",
+        hgc_thr,
+    ]]
+    tbl_c1 = ax2.table(cellText=c1_rows, colLabels=c1_cols,
+                       loc="upper center", bbox=[0, 0.52, 1.0, 0.44])
+    _style_table(tbl_c1, _HC, _FS)
+
+    # C2: coincidence-time window (1 data row)
+    ctr_str = ("auto" if cuts.ctime_real_center == "auto"
+               else f"{cuts.ctime_real_center:.3f} ns")
+    nsigma_str = (f"{cuts.ctime_real_nsigma:.1f}σ"
+                  if cuts.ctime_real_nsigma is not None else "— (always fallback)")
+    c2_cols = ["ctime center", "ctime nsigma", "fallback [ns]",
+               "rand n_skip", "rand peaks lo+hi"]
+    c2_rows = [[
+        ctr_str, nsigma_str,
+        f"{cuts.ctime_real_window_fallback:.2f}",
+        str(cuts.ctime_random_n_skip),
+        f"{cuts.ctime_random_n_peaks_lo}+{cuts.ctime_random_n_peaks_hi}",
+    ]]
+    tbl_c2 = ax2.table(cellText=c2_rows, colLabels=c2_cols,
+                       loc="upper center", bbox=[0, 0.02, 0.65, 0.44])
+    _style_table(tbl_c2, _HC, _FS)
+
+    # ── D: Background Subtraction (one row per histogram) ─────────────────
+    ax3 = fig.add_subplot(gs[3])
+    ax3.axis("off")
+    ax3.set_title("Background Subtraction", loc="left",
+                  fontsize=9, fontweight="bold", pad=3)
+
+    d_step_cols: list[str] = []
+    pull_col_indices: list[int] = []
+    for i, step in enumerate(steps_present):
+        scl = scale_by_step.get(step, 1.0)
+        d_step_cols.append(f"{step} sub%\n(scale={scl:.3f})")
+        d_step_cols.append(f"{step} |pull|")
+        pull_col_indices.append(1 + 2 * i + 1)   # 0=hname, then pairs
+
+    d_cols = ["histogram"] + d_step_cols
+    d_rows: list[list[str]] = []
+    for hname in hist_names:
+        row: list[str] = [hname]
+        for step in steps_present:
+            if step in pivot[hname]:
+                sub_pct, pull = pivot[hname][step]
+                row.extend([f"{sub_pct:.1f}", f"{pull:.2f}"])
+            else:
+                row.extend(["—", "—"])
+        d_rows.append(row)
+
+    tbl_d = ax3.table(cellText=d_rows, colLabels=d_cols,
+                      loc="upper center", bbox=[0, 0, 1, 1])
+    _style_table(tbl_d, _HC, _FS - 1,
+                 pull_cols=pull_col_indices, pull_data=d_rows)
+
     pdf.savefig(fig)
     plt.close(fig)
 
@@ -1656,7 +1838,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
                 )
                 bin_groups.append((_bin_in.branch, _this_group))
 
-        _page_statistics(pdf, result, sub_results)
+        _page_statistics(pdf, result, sub_results, yaml_path)
 
     root_path = output_pdf.with_suffix(".root")
     _write_root_file(root_path, result,
