@@ -540,7 +540,7 @@ def _log_normyield_table(ny_df: pd.DataFrame, label: str) -> None:
             )
         lines.append(nsep)
 
-    print("\n".join(lines), flush=True)
+    logger.debug("\n".join(lines))
 
 
 def _fmt(v) -> str:

@@ -395,7 +395,7 @@ def step_generate(df: pd.DataFrame, force: bool, dry_run: bool) -> None:
                         force, dry_run)
 
 
-def step_analyze(df: pd.DataFrame, force: bool, dry_run: bool) -> None:
+def step_analyze(df: pd.DataFrame, force: bool, dry_run: bool, verbose: bool = False) -> None:
     for _, row in df.iterrows():
         stem        = _setting_stem(row.target, row.ebeam, row.x, row.Q2, row.z,
                                     row.thpq, row.run_type)
@@ -410,7 +410,10 @@ def step_analyze(df: pd.DataFrame, force: bool, dry_run: bool) -> None:
             continue
 
         print(f"  analyze           {stem}")
-        _run([_PYTHON, "analysis.py", str(config_path)], dry_run)
+        cmd = [_PYTHON, "analysis.py", str(config_path)]
+        if verbose:
+            cmd.append("--verbose")
+        _run(cmd, dry_run)
 
 
 def step_combine(df: pd.DataFrame, binned: bool, force: bool, dry_run: bool) -> None:
@@ -493,6 +496,10 @@ def main() -> None:
         "--force", action="store_true",
         help="Re-generate / re-run even when output already exists",
     )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Pass --verbose to analysis.py (show all INFO messages; default: top-level only)",
+    )
     args = parser.parse_args()
 
     df = load_settings(*args.settings)
@@ -514,7 +521,7 @@ def main() -> None:
 
     if "analyze" in args.steps:
         print("\n── analyze ──────────────────────────────────────────────────")
-        step_analyze(df, args.force, args.dry_run)
+        step_analyze(df, args.force, args.dry_run, args.verbose)
 
     if "combine" in args.steps:
         print("\n── combine ──────────────────────────────────────────────────")

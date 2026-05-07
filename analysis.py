@@ -52,11 +52,42 @@ from rsidis_ssa.pipeline import PipelineResult, run_pipeline_from_yaml
 # Logging
 # ---------------------------------------------------------------------------
 
-logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
-    format="%(levelname)-8s %(name)s: %(message)s",
-)
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging(verbose: bool) -> None:
+    """
+    Default (no --verbose): root at INFO — shows high-level summary from both
+    analysis.py and rsidis_ssa.pipeline; per-run detail tables and the
+    background subtraction table (DEBUG) are suppressed.
+    --verbose/-v: rsidis_ssa and __main__ go to DEBUG so detail tables appear;
+    root stays at INFO so third-party libs (fsspec, asyncio…) stay quiet.
+    LOG_LEVEL env-var sets root level directly (overrides both modes).
+    """
+    fmt  = logging.Formatter("%(levelname)-8s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.handlers.clear()
+
+    env_level = os.environ.get("LOG_LEVEL")
+    if env_level:
+        root_level = getattr(logging, env_level.upper(), logging.INFO)
+        root.setLevel(root_level)
+        for name in ("__main__", "rsidis_ssa"):
+            logging.getLogger(name).setLevel(logging.NOTSET)
+    else:
+        root.setLevel(logging.INFO)
+        detail_level = logging.DEBUG if verbose else logging.INFO
+        for name in ("__main__", "rsidis_ssa"):
+            logging.getLogger(name).setLevel(detail_level)
+
+    root.addHandler(_make_handler(fmt))
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+
+
+def _make_handler(fmt: logging.Formatter) -> logging.StreamHandler:
+    h = logging.StreamHandler()
+    h.setFormatter(fmt)
+    return h
 
 # ---------------------------------------------------------------------------
 # Plot style
@@ -1544,7 +1575,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
 
         final[hname] = h_final
 
-    logger.info(subtraction_summary(sub_results))
+    logger.debug(subtraction_summary(sub_results))
 
     # ---- generate PDF ----
     logger.info("Writing diagnostic PDF: %s", output_pdf)
@@ -1655,7 +1686,13 @@ def main() -> None:
         "--output", "-o", type=Path, default=None,
         help="Output PDF path (default: <config-stem>_diagnostics.pdf)"
     )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Show all INFO messages from rsidis_ssa submodules (default: top-level only)",
+    )
     args = parser.parse_args()
+
+    _configure_logging(args.verbose)
 
     yaml_path  = args.config
     output_pdf = Path(args.output) if args.output else None
