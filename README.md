@@ -9,9 +9,10 @@ One YAML config file drives one complete analysis (one kinematic setting, one ta
 
 1. [Quick Start](#quick-start)
 2. [Pipeline Automation](#pipeline-automation)
-3. [Package Layout](#package-layout)
-4. [Module Dependency Tree](#module-dependency-tree)
-5. [Workflow: Step by Step](#workflow-step-by-step)
+3. [Visualization Scripts](#visualization-scripts)
+4. [Package Layout](#package-layout)
+5. [Module Dependency Tree](#module-dependency-tree)
+6. [Workflow: Step by Step](#workflow-step-by-step)
    - [Step 1 — Configuration](#step-1--configuration)
    - [Step 2 — Run Selection](#step-2--run-selection)
    - [Step 3 — Per-Run Normalization Weights](#step-3--per-run-normalization-weights)
@@ -21,10 +22,10 @@ One YAML config file drives one complete analysis (one kinematic setting, one ta
    - [Step 7 — Run Combination](#step-7--run-combination)
    - [Step 8 — Background Subtraction](#step-8--background-subtraction)
    - [Step 9 — Asymmetry Calculation](#step-9--asymmetry-calculation)
-6. [Diagnostic PDF Pages](#diagnostic-pdf-pages)
-7. [Configuration Reference](#configuration-reference)
-8. [Run Constants Reference](#run-constants-reference)
-9. [Branch Name Reference](#branch-name-reference)
+7. [Diagnostic PDF Pages](#diagnostic-pdf-pages)
+8. [Configuration Reference](#configuration-reference)
+9. [Run Constants Reference](#run-constants-reference)
+10. [Branch Name Reference](#branch-name-reference)
 
 ---
 
@@ -36,6 +37,13 @@ Single setting, manually:
 python analysis.py config/C_pip_e10p7_x0p25_q23p3_z0p5_thpq2p0.yaml
 ```
 
+Add `--verbose` / `-v` to see per-run detail tables and the background subtraction
+breakdown (suppressed by default):
+
+```bash
+python analysis.py --verbose config/C_pip_e10p7_x0p25_q23p3_z0p5_thpq2p0.yaml
+```
+
 Full automated pipeline for all run-period-1 settings:
 
 ```bash
@@ -44,8 +52,12 @@ python run_pipeline.py \
                data/settings/rpr1_pim_settings.csv
 ```
 
-Each `analysis.py` run produces a multi-page PDF (`<config-stem>_diagnostics.pdf`) and
-a CSV of per-bin asymmetry values (`output/<stem>/<stem>.csv`).
+Each `analysis.py` run produces:
+- A multi-page diagnostic PDF (`output/<stem>/<stem>.pdf`)
+- An unbinned asymmetry CSV (`output/<stem>/<stem>.csv`)
+- A binned (p_T slice) asymmetry CSV (`output/<stem>/<stem>_binned.csv`)
+- A kinematic summary CSV (`output/<stem>/<stem>_summary.csv`)
+- A ROOT file with all subtracted histograms (`output/<stem>/<stem>.root`)
 
 ---
 
@@ -85,6 +97,9 @@ python run_pipeline.py --settings ... --target C --z 0.5 --steps combine
 
 # Re-run everything even if outputs exist
 python run_pipeline.py --settings ... --force
+
+# Show per-run detail in analysis output
+python run_pipeline.py --settings ... --verbose
 ```
 
 ### Settings CSV format
@@ -141,6 +156,54 @@ The output path defaults to
 
 ---
 
+## Visualization Scripts
+
+These scripts operate on the combined output CSVs in `output/combined/` and produce
+publication-style PDFs in `output/plots/`.
+
+### `plot_z_dependence.py`
+
+Plots A_LU^sinφ as a function of z for a single target and hadron species.
+
+```bash
+python plot_z_dependence.py --target C --particle pip
+python plot_z_dependence.py --target LH2 --particle pim
+python plot_z_dependence.py --target C --particle pip --output my_plot.pdf
+```
+
+Produces a two-page PDF:
+- **Page 1** — A_LU^sinφ vs p_T (one curve per z) and vs z (one curve per p_T bin)
+- **Page 2** — A_LU^sinφ vs z, one panel per p_T bin, shared y-axis, no gap between panels
+
+### `plot_target_dependence.py`
+
+Compares A_LU^sinφ (and optionally F_LU^sinφ/F_UU) across targets for all z values.
+π⁺ and π⁻ are overlaid on the same panels with distinct colours and markers.
+
+```bash
+# Default: A_LU only, all targets
+python plot_target_dependence.py
+
+# With F_LU/F_UU pages (requires ε = virtual-photon depolarisation)
+python plot_target_dependence.py --epsilon 0.7
+
+# Custom y ranges and target subset
+python plot_target_dependence.py --epsilon 0.7 \
+    --ylim -0.02 0.12  --ylim-diff -0.06 0.06 \
+    --ylim-flu -0.05 0.20  --ylim-flu-diff -0.10 0.10 \
+    --targets C Cu LD2 LH2 --reference LH2
+```
+
+Page layout:
+- **Page 1** — A_LU^sinφ, all targets vs z (π⁺ and π⁻ overlaid)
+- **Page 2** — A_LU^sinφ difference (A_target − A_ref)
+- **Page 3** — F_LU^sinφ/F_UU vs z (`--epsilon` only)
+- **Page 4** — F_LU^sinφ/F_UU difference (`--epsilon` only)
+
+where `F_LU^sinφ / F_UU = A_LU^sinφ / sqrt(2 ε (1−ε))`.
+
+---
+
 ## Package Layout
 
 ```
@@ -148,12 +211,14 @@ ssa/
 ├── analysis.py                  # Single-setting driver — generates diagnostic PDF + output CSV
 ├── combine_asymmetry.py         # Combine asymmetries across thpq values (IVW)
 ├── run_pipeline.py              # Automated pipeline: generate configs → analyze → combine
+├── plot_z_dependence.py         # z-dependence plots for one target/hadron
+├── plot_target_dependence.py    # Target-dependence comparison across all targets
 ├── config/
 │   ├── <target>_<pip|pim>_<kin>_base.yaml     # Base config shared across thpq values
 │   ├── <target>_<pip|pim>_<kin>_thpq<v>.yaml  # Per-thpq override (4 lines; _base: ...)
 │   └── run_constants.yaml       # Run-period constants (dummy scales, beam_bunch_ns, …)
 ├── data/
-│   ├── rsidis_bigtable_pass0p1.csv   # Master runlist
+│   ├── rsidis_bigtable_pass0p1.csv   # Master runlist (includes BCM2_Q_hp/BCM2_Q_hm columns)
 │   ├── rootfiles_pass0p1/            # Symlinked or local ROOT skim files
 │   └── settings/
 │       ├── rpr1_pip_settings.csv     # All π⁺ settings for run period 1
@@ -162,7 +227,9 @@ ssa/
 │   ├── <stem>/                       # Per-setting output directory
 │   │   ├── <stem>.csv                # Unbinned asymmetry table
 │   │   ├── <stem>_binned.csv         # Binned (pt slice) asymmetry table
-│   │   └── <stem>_diagnostics.pdf    # Multi-page diagnostic plots
+│   │   ├── <stem>_summary.csv        # Kinematic summary
+│   │   ├── <stem>.root               # All subtracted histograms
+│   │   └── <stem>.pdf                # Multi-page diagnostic plots
 │   └── combined/
 │       └── <stem>_thpq<v1>AND<v2>.csv   # Combined asymmetry across thpq values
 └── rsidis_ssa/
@@ -233,6 +300,7 @@ hardcoded in the analysis code.
 | `do_dummy_subtraction` | Whether to subtract dummy-target background (LH2/LD2 only) |
 | `rootfiles` | Directory, filename pattern (`{run}` placeholder), tree name |
 | `runlist` | Path to the master CSV (resolved relative to the config file) |
+| `normalization` | Luminosity normalization scheme and helicity-gated charge options |
 | `cuts` | All PID and coincidence-time cut thresholds |
 | `histograms` | List of 1-D histogram definitions |
 
@@ -302,6 +370,21 @@ A run is **excluded** from the weight table (and from analysis) if any normaliza
 column is NaN, zero, or negative.  Excluded runs are recorded in
 `WeightTableResult.excluded` with a human-readable reason.
 
+#### Helicity-gated charge normalization
+
+When `normalization.use_helicity_gated_charge: true`, the master runlist must contain
+two additional columns (names configurable via `charge_hp_column` / `charge_hm_column`,
+default `BCM2_Q_hp` / `BCM2_Q_hm`) giving the beam charge delivered during helicity-plus
+and helicity-minus gate windows, in μC.
+
+After all runs are filled, helicity-split histograms (`_hplus` / `_hminus` suffixes)
+are divided by the summed per-helicity charge (Q_hp_tot / Q_hm_tot) instead of the
+total Q_tot.  Inclusive histograms (no helicity suffix) continue to use Q_tot.
+This corrects for any asymmetry in the time spent in each helicity state.
+
+When the flag is `false` (default), Q_hp_tot = Q_hm_tot = Q_tot / 2, which is
+equivalent to assuming equal helicity-state charges (ratio = 1).
+
 ---
 
 ### Step 4 — ROOT File Reading
@@ -339,6 +422,9 @@ in a run at once).
 & (P_hgcer_npeSum      >= phgc_npe_min)
 & (P_cal_etottracknorm <= psshsum_max)
 ```
+
+When `phgc_p_threshold` is set, the HGC NPE cut is applied only to events where
+`P_gtr_p >= phgc_p_threshold`; below that momentum threshold the HGC cut is skipped.
 
 **Real coincidence-time mask** (`cuts.build_real_mask`) — PID AND:
 
@@ -633,7 +719,7 @@ excluded from WLS) is equivalent in practice but cleaner.
 | 2 | **Normalized yield & run diagnostics** — top row: workflow vs CSV normyield per run for each active run type, flagged runs (>2% residual) marked in red; bottom row: raw event-count comparison (n_real, n_rand×scale, n_rsc vs CSV coin/randoms/ransubcoin); right panel: weight distributions and beam current + normalization components vs run |
 | 3 … N | **Per-histogram subtraction** — one page per histogram, 2–4 panels: "Before random sub" → "After random sub" → "After e⁺ sub" → "After dummy sub". Each panel overlays the relevant background histogram scaled to what is actually subtracted (dummy overlay shown as `dummy×scale − random`) |
 | N+1 | **Beam SSA** — one row per helicity-split pair (e.g. `phipq_hplus`/`phipq_hminus`): left panel shows A_phys vs φ on auto-scale; right panel shows the same data zoomed to y ∈ (−0.1, 0.1).  Both panels overlay the best-fit A × sin(φ) curve.  Info box: amplitude ± σ, χ²/ndf, N_bins used, P_beam. |
-| Last | **Statistics table** — run counts, exclusion reasons, file-skip list, full subtraction summary (fraction subtracted %, max\|pull\| per histogram per subtraction step) |
+| Last | **Run Summary** — four labelled sections rendered as tables: (A) config file path + generation timestamp; (B) kinematic setting, normalization scheme, and per-run-type charge totals with exclusion counts; (C) all PID/acceptance cuts and coincidence-time window parameters; (D) background subtraction table with one row per histogram and paired sub% / \|pull\| columns per active step (random/dummy/eplus), pull cells > 5 highlighted in red. |
 
 ---
 
@@ -683,7 +769,11 @@ runlist:
   csv: ../data/rsidis_bigtable_pass0p1.csv  # relative to this YAML file
 
 normalization:
-  charge_column: BCM2_Q   # BCM1_Q / BCM2_Q / BCM4A_Q / BCM4B_Q / BCM4C_Q
+  charge_column: BCM2_Q             # BCM1_Q / BCM2_Q / BCM4A_Q / BCM4B_Q / BCM4C_Q
+  weight_scheme: charge_only        # eff_corrected_counts | eff_corrected_charge | charge_only
+  use_helicity_gated_charge: true   # divide _hplus/_hminus histos by Q_hp/Q_hm instead of Q_tot
+  charge_hp_column: BCM2_Q_hp       # runlist column for helicity-plus charge [μC]
+  charge_hm_column: BCM2_Q_hm       # runlist column for helicity-minus charge [μC]
 
 cuts:
   # HMS electron PID
@@ -697,6 +787,7 @@ cuts:
   psdelta_hi:    20.0      # SHMS δ upper bound [%]
   paero_npe_min:  2.0      # SHMS aerogel NPE threshold
   phgc_npe_min:   1.0      # SHMS HGC NPE threshold
+  phgc_p_threshold: null   # GeV/c; null = unconditional HGC cut; float = apply only above this momentum
   psshsum_max:    0.8      # SHMS calorimeter E/p maximum (pion rejection)
 
   # Coincidence time — real peak
