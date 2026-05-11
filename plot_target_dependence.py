@@ -106,6 +106,7 @@ def _to_flu_fuu(df: pd.DataFrame, epsilon: float) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _ax_style(ax: plt.Axes, *, xlabel: bool, ylabel: bool) -> None:
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=5, prune="both"))
     ax.xaxis.set_minor_locator(mticker.AutoMinorLocator())
     ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
     ax.tick_params(which="both", direction="in", top=True, right=True)
@@ -147,6 +148,63 @@ def _compute_diff(df: pd.DataFrame, reference: str) -> pd.DataFrame:
     merged["asym"]     = merged["asym"] - merged["_ref"]
     merged["asym_err"] = np.sqrt(merged["asym_err"] ** 2 + merged["_ref_err"] ** 2)
     return merged.drop(columns=["_ref", "_ref_err"])
+
+
+def _compute_diff_pt(df: pd.DataFrame, reference: str) -> pd.DataFrame:
+    """Subtract reference from every other target for z-averaged (p_T axis) data."""
+    ref = (df[df["target"] == reference]
+           .rename(columns={"asym": "_ref", "asym_err": "_ref_err"})
+           [["particle", "histogram", "bin_center", "_ref", "_ref_err"]])
+
+    other  = df[df["target"] != reference].copy()
+    merged = other.merge(ref, on=["particle", "histogram", "bin_center"], how="inner")
+
+    merged["asym"]     = merged["asym"] - merged["_ref"]
+    merged["asym_err"] = np.sqrt(merged["asym_err"] ** 2 + merged["_ref_err"] ** 2)
+    return merged.drop(columns=["_ref", "_ref_err"])
+
+
+# ---------------------------------------------------------------------------
+# z-averaging (IVW)
+# ---------------------------------------------------------------------------
+
+def _z_ivw_average(df: pd.DataFrame, z_vals: list[float],
+                   tol: float = 0.02) -> pd.DataFrame:
+    """
+    IVW-average asym over rows whose z matches any value in z_vals (±tol).
+
+    Groups by (target, particle, histogram, hmin, hmax, bin_center) and
+    combines the matched z slices with inverse-variance weights.
+
+    Raises ValueError if no rows match.
+    """
+    mask = df["z"].apply(lambda z: any(abs(z - zv) < tol for zv in z_vals))
+    sub  = df[mask]
+    if sub.empty:
+        avail = sorted(df["z"].unique().tolist())
+        raise ValueError(
+            f"--z-avg: no data matched z ∈ {z_vals} (tol={tol}); "
+            f"available z values: {avail}"
+        )
+
+    def _ivw(g: pd.DataFrame) -> pd.Series:
+        valid = g[g["asym_err"] > 0]
+        if valid.empty:
+            return pd.Series({"asym": np.nan, "asym_err": np.nan,
+                              "x": g["x"].iloc[0], "q2": g["q2"].iloc[0]})
+        w = 1.0 / valid["asym_err"] ** 2
+        return pd.Series({
+            "asym":     float((valid["asym"] * w).sum() / w.sum()),
+            "asym_err": float(1.0 / np.sqrt(w.sum())),
+            "x":        g["x"].iloc[0],
+            "q2":       g["q2"].iloc[0],
+        })
+
+    return (sub
+            .groupby(["target", "particle", "histogram",
+                      "hmin", "hmax", "bin_center"])
+            .apply(_ivw)
+            .reset_index())
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +335,111 @@ def _emit_pages(
 
 
 # ---------------------------------------------------------------------------
+# z-averaged difference figure and page emitter
+# ---------------------------------------------------------------------------
+
+def _fig_zavg_diff(
+    df_diff:  pd.DataFrame,
+    targets:  list[str],
+    z_vals:   list[float],
+    suptitle: str,
+    qty:      str = _QTY_A,
+    diff_ref: str | None = None,
+    ylim:     tuple[float, float] | None = None,
+) -> plt.Figure:
+    """
+    One row per (non-reference) target, single column.
+    x-axis: ⟨p_T⟩ bin center.  y-axis: z-IVW-averaged asymmetry difference.
+    Both π⁺ and π⁻ are overlaid per panel.
+    """
+    n_rows = len(targets)
+    fig, axes = plt.subplots(
+        n_rows, 1,
+        sharex=True, sharey=True,
+        figsize=(5.0, 2.8 * n_rows),
+        squeeze=False,
+    )
+    fig.subplots_adjust(top=0.93, hspace=0)
+    fig.suptitle(suptitle, fontsize=10)
+
+    z_str = ", ".join(f"{z:.2f}" for z in sorted(z_vals))
+
+    for r, target in enumerate(targets):
+        ax        = axes[r, 0]
+        is_bottom = (r == n_rows - 1)
+
+        for particle, style in _PARTICLE_STYLES.items():
+            grp = (df_diff[(df_diff["target"]   == target)
+                           & (df_diff["particle"] == particle)]
+                   .sort_values("bin_center"))
+            if grp.empty:
+                continue
+            ax.errorbar(
+                grp["bin_center"], grp["asym"], yerr=grp["asym_err"],
+                fmt=style["marker"], color=style["color"],
+                capsize=3, markersize=5, elinewidth=1.0,
+                lw=0.8,
+            )
+
+        ax.axhline(0, color="gray", lw=0.8, ls="--", zorder=0)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+
+        ax.text(0.97, 0.95, target,
+                transform=ax.transAxes, va="top", ha="right",
+                fontsize=9, fontweight="bold")
+        ax.set_ylabel(_ylabel(qty, target, diff_ref), fontsize=8)
+        _ax_style(ax, xlabel=is_bottom, ylabel=True)
+
+        if is_bottom:
+            ax.set_xlabel(r"$\langle P_T \rangle$ (GeV/$c$)", fontsize=10)
+            ax.text(0.03, 0.05, f"z-avg: {z_str}",
+                    transform=ax.transAxes, va="bottom", ha="left",
+                    fontsize=7, color="0.45")
+
+    handles = [
+        Line2D([], [], marker=st["marker"], color=st["color"],
+               ls="", markersize=5, label=st["label"])
+        for st in _PARTICLE_STYLES.values()
+    ]
+    axes[0, 0].legend(handles=handles, loc="lower left",
+                      fontsize=8, framealpha=0.7)
+    return fig
+
+
+def _emit_zavg_diff_pages(
+    pdf:          PdfPages,
+    df_all:       pd.DataFrame,
+    diff_targets: list[str],
+    z_vals:       list[float],
+    reference:    str,
+    qty:          str,
+    ylim_diff:    tuple | None,
+    epsilon:      float | None = None,
+) -> int:
+    """IVW-average df_all over z_vals, compute diff vs reference, write one page."""
+    if not diff_targets:
+        return 0
+
+    df_avg  = _z_ivw_average(df_all, z_vals)
+    df_diff = _compute_diff_pt(df_avg, reference)
+    if df_diff.empty:
+        return 0
+
+    z_str  = ", ".join(f"{z:.2f}" for z in sorted(z_vals))
+    title  = _page_suptitle(
+        df_all, qty,
+        suffix=rf" $-$ {reference}  [z-avg: {{{z_str}}}]",
+        epsilon=epsilon,
+    )
+    fig = _fig_zavg_diff(df_diff, diff_targets, z_vals, title,
+                         qty=qty, diff_ref=reference, ylim=ylim_diff)
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+    return 1
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -320,6 +483,21 @@ def main() -> None:
         "--ylim-flu-diff", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
         help="Y range for F_LU/F_UU difference page",
     )
+    # ── z-averaged difference ─────────────────────────────────────────────────
+    parser.add_argument(
+        "--z-avg", nargs="+", type=float, default=None, metavar="Z",
+        help="IVW-average asymmetry over these z values, then plot diff vs p_T",
+    )
+    parser.add_argument(
+        "--ylim-zavg-diff", nargs=2, type=float, default=None,
+        metavar=("YMIN", "YMAX"),
+        help="Y range for z-averaged A_LU difference page (default: --ylim-diff)",
+    )
+    parser.add_argument(
+        "--ylim-flu-zavg-diff", nargs=2, type=float, default=None,
+        metavar=("YMIN", "YMAX"),
+        help="Y range for z-averaged F_LU/F_UU difference page (default: --ylim-flu-diff)",
+    )
     # ── output ───────────────────────────────────────────────────────────────
     parser.add_argument(
         "--output", default=None, metavar="PDF",
@@ -334,6 +512,8 @@ def main() -> None:
     ylim_diff     = tuple(args.ylim_diff)     if args.ylim_diff     else None
     ylim_flu      = tuple(args.ylim_flu)      if args.ylim_flu      else None
     ylim_flu_diff = tuple(args.ylim_flu_diff) if args.ylim_flu_diff else None
+    ylim_zavg_diff     = tuple(args.ylim_zavg_diff)     if args.ylim_zavg_diff     else ylim_diff
+    ylim_flu_zavg_diff = tuple(args.ylim_flu_zavg_diff) if args.ylim_flu_zavg_diff else ylim_flu_diff
 
     df_all  = _load_all(args.variable)
     targets = _ordered_targets(df_all, args.targets)
@@ -350,6 +530,8 @@ def main() -> None:
     diff_targets = [t for t in targets if t != args.reference]
     has_diff     = args.reference in df_all["target"].values and bool(diff_targets)
 
+    df_flu = _to_flu_fuu(df_all, args.epsilon) if args.epsilon is not None else None
+
     n_pages = 0
     with PdfPages(out) as pdf:
         # ── A_LU^sinφ pages ──────────────────────────────────────────────────
@@ -362,8 +544,7 @@ def main() -> None:
         )
 
         # ── F_LU^sinφ / F_UU pages (only when --epsilon is given) ────────────
-        if args.epsilon is not None:
-            df_flu = _to_flu_fuu(df_all, args.epsilon)
+        if df_flu is not None:
             n_pages += _emit_pages(
                 pdf, df_flu, targets, diff_targets, bins, has_diff,
                 reference = args.reference,
@@ -372,6 +553,26 @@ def main() -> None:
                 ylim_diff = ylim_flu_diff,
                 epsilon   = args.epsilon,
             )
+
+        # ── z-averaged difference pages ───────────────────────────────────────
+        if args.z_avg and has_diff:
+            try:
+                n_pages += _emit_zavg_diff_pages(
+                    pdf, df_all, diff_targets, args.z_avg,
+                    reference = args.reference,
+                    qty       = _QTY_A,
+                    ylim_diff = ylim_zavg_diff,
+                )
+                if df_flu is not None:
+                    n_pages += _emit_zavg_diff_pages(
+                        pdf, df_flu, diff_targets, args.z_avg,
+                        reference = args.reference,
+                        qty       = _QTY_F,
+                        ylim_diff = ylim_flu_zavg_diff,
+                        epsilon   = args.epsilon,
+                    )
+            except ValueError as exc:
+                print(f"Warning: {exc}")
 
     print(f"Saved: {out}  ({n_pages} pages)")
 
