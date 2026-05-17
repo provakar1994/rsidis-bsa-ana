@@ -91,6 +91,10 @@ python run_pipeline.py --settings ... --steps generate
 # One target, one z value, all steps
 python run_pipeline.py --settings ... --target LH2 --z 0.5
 
+# Parallel exclusive-event process for z = 0.9.
+# This keeps the nominal W cut and uses an exclusive missing-mass window.
+python run_pipeline.py --settings ... --z 0.9 --process exclusive --binned
+
 # One target, one thpq — run analysis only, then combine the whole family
 python run_pipeline.py --settings ... --target C --z 0.5 --thpq -0.8 --steps analyze
 python run_pipeline.py --settings ... --target C --z 0.5 --steps combine
@@ -133,6 +137,42 @@ setting:
 are merged key-by-key; scalars and lists in the override replace the base value.
 Base files must not themselves reference another `_base` (one level only).
 
+### Parallel analysis processes
+
+Use `--process <name>` to run a second analysis stream for the same kinematic
+settings without overwriting the nominal SIDIS configs or outputs. The default
+process is `sidis`, which preserves the historical filenames. Any other process
+name is inserted between the z tag and `thpq`/`base`:
+
+```text
+config/C_pip_e10p7_x0p25_q23p3_z0p9_base.yaml
+config/C_pip_e10p7_x0p25_q23p3_z0p9_thpq2p0.yaml
+
+config/C_pip_e10p7_x0p25_q23p3_z0p9_exclusive_base.yaml
+config/C_pip_e10p7_x0p25_q23p3_z0p9_exclusive_thpq2p0.yaml
+```
+
+The built-in `exclusive` process is intended for low-missing-mass exclusive
+events, especially at `z = 0.9`. Generated exclusive configs keep the nominal
+wide W cut, `2.0 <= W <= 100` GeV, and set the missing-mass cut to
+`0.85 <= M_miss <= 1.05` GeV.
+
+Example:
+
+```bash
+python run_pipeline.py \
+    --settings data/settings/rpr1_pip_settings.csv \
+               data/settings/rpr1_pim_settings.csv \
+    --z 0.9 \
+    --process exclusive \
+    --steps generate analyze combine \
+    --binned
+```
+
+This writes independent outputs such as
+`output/C_pip_e10p7_x0p25_q23p3_z0p9_exclusive_thpq2p0/` and combined files
+under `output/combined/` with the same `_exclusive_` process tag.
+
 ### Combining asymmetries across thpq values
 
 `combine_asymmetry.py` has two run modes:
@@ -153,6 +193,18 @@ python combine_asymmetry.py \
 ```
 The output path defaults to
 `output/combined/<stem>_thpq<v1>AND<v2>...(_binned).csv`.
+
+Process-tagged bases work the same way:
+
+```bash
+python combine_asymmetry.py \
+    --base_config config/C_pip_e10p7_x0p25_q23p3_z0p9_exclusive_base.yaml \
+    --thpq -0.8 2.0 \
+    --is_binned
+```
+
+Summary CSVs include a `process` column (`sidis` for nominal files,
+`exclusive` for the exclusive stream).
 
 ---
 
@@ -216,6 +268,8 @@ ssa/
 ├── config/
 │   ├── <target>_<pip|pim>_<kin>_base.yaml     # Base config shared across thpq values
 │   ├── <target>_<pip|pim>_<kin>_thpq<v>.yaml  # Per-thpq override (4 lines; _base: ...)
+│   ├── <target>_<pip|pim>_<kin>_<process>_base.yaml     # Parallel process base
+│   ├── <target>_<pip|pim>_<kin>_<process>_thpq<v>.yaml  # Parallel process override
 │   └── run_constants.yaml       # Run-period constants (dummy scales, beam_bunch_ns, …)
 ├── data/
 │   ├── rsidis_bigtable_pass0p1.csv   # Master runlist (includes BCM2_Q_hp/BCM2_Q_hm columns)
@@ -789,6 +843,12 @@ cuts:
   phgc_npe_min:   1.0      # SHMS HGC NPE threshold
   phgc_p_threshold: null   # GeV/c; null = unconditional HGC cut; float = apply only above this momentum
   psshsum_max:    0.8      # SHMS calorimeter E/p maximum (pion rejection)
+
+  # Kinematic cuts
+  W_lo:       2.0          # invariant mass W lower bound [GeV]
+  W_hi:       100          # invariant mass W upper bound [GeV]
+  mmass_lo:   1.5          # missing-mass lower bound [GeV]
+  mmass_hi:   100          # missing-mass upper bound [GeV]
 
   # Coincidence time — real peak
   ctime_real_center:          auto   # "auto" → use ctmean from CSV; or fixed ns value

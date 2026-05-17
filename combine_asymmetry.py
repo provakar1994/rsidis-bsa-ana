@@ -64,6 +64,7 @@ _STEM_RE = re.compile(
     r"x(?P<x>[0-9mp]+)_"
     r"q2(?P<q2>[0-9mp]+)_"
     r"z(?P<z>[0-9mp]+)_"
+    r"(?:(?P<process>[A-Za-z0-9_]+)_)?"
     r"thpq(?P<thpq>[0-9mp]+)$"
 )
 _PARTICLE_LABEL = {"pim": "pi-", "pip": "pi+"}
@@ -101,6 +102,7 @@ def _parse_kinematic_stem(stem: str) -> dict | None:
         "x":        _decode_float(m.group("x")),
         "q2":       _decode_float(m.group("q2")),
         "z":        _decode_float(m.group("z")),
+        "process":  m.group("process") or "sidis",
         "thpq":     _decode_float(m.group("thpq")),
     }
 
@@ -118,6 +120,9 @@ def _build_inputs_from_config(
         output/<stem>/<stem>_binned.csv   (binned)
 
     where <stem> = <base_config_stem_without_base>_thpq<encoded_thpq>.
+    Process-tagged bases are also supported, e.g.
+    <base_config_stem_without_base>_thpq... for
+    C_pip_..._z0p9_exclusive_base.yaml.
 
     Returns (inputs, default_output_stem).
     """
@@ -539,6 +544,7 @@ def _write_combined_summary(
             "x":         first_kin.get("x"),
             "q2":        first_kin.get("q2"),
             "z":         first_kin.get("z"),
+            "process":   first_kin.get("process", "sidis"),
             "thpq":      thpq_str,
             "histogram": hname,
             "asym":      amp      if np.isfinite(amp)      else np.nan,
@@ -547,7 +553,7 @@ def _write_combined_summary(
             "n_bins":    n_used,
         })
 
-    cols = ["target", "particle", "ebeam", "x", "q2", "z", "thpq",
+    cols = ["target", "particle", "ebeam", "x", "q2", "z", "process", "thpq",
             "histogram", "asym", "asym_err", "chi2_ndf", "n_bins"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
     logger.info("Kinematic summary → %s", path)
@@ -576,6 +582,7 @@ def _write_combined_binned_summary(
             "x":          first_kin.get("x"),
             "q2":         first_kin.get("q2"),
             "z":          first_kin.get("z"),
+            "process":    first_kin.get("process", "sidis"),
             "thpq":       thpq_str,
             "variable":   variable,
             "hmin":       hmin,
@@ -588,7 +595,7 @@ def _write_combined_binned_summary(
             "n_bins":     n_used,
         })
 
-    cols = ["target", "particle", "ebeam", "x", "q2", "z", "thpq",
+    cols = ["target", "particle", "ebeam", "x", "q2", "z", "process", "thpq",
             "variable", "hmin", "hmax", "bin_center", "histogram",
             "asym", "asym_err", "chi2_ndf", "n_bins"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)

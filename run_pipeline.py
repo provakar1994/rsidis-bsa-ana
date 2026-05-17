@@ -25,11 +25,15 @@ Analyze a single thpq, then combine all:
 
 Dry run (print every command, execute nothing):
     python run_pipeline.py --settings ... --dry-run
+
+Parallel exclusive process, keeping nominal W cut and selecting low missing mass:
+    python run_pipeline.py --settings ... --z 0.9 --process exclusive
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +48,8 @@ CONFIG_DIR   = Path("config")
 OUTPUT_DIR   = Path("output")
 CRYO_TARGETS = {"LH2", "LD2"}
 _PYTHON      = sys.executable   # use the same interpreter that launched this script
+
+DEFAULT_PROCESS = "sidis"
 
 # ---------------------------------------------------------------------------
 # Float encoding (matches existing config filename convention)
@@ -62,20 +68,43 @@ def _fenc(v: float, decimals: int) -> str:
     return s.replace("-", "m").replace(".", "p")
 
 
+def _normalize_process(process: str | None) -> str:
+    if process is None:
+        return DEFAULT_PROCESS
+    process = process.strip().lower()
+    return process or DEFAULT_PROCESS
+
+
+def _process_tag(process: str | None) -> str:
+    """Return filename tag for a parallel analysis process."""
+    process = _normalize_process(process)
+    if process == DEFAULT_PROCESS:
+        return ""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_]*", process):
+        raise ValueError(
+            "process must contain only lowercase letters, digits, and underscores "
+            "and must start with a letter or digit"
+        )
+    return f"_{process}"
+
+
 def _setting_stem(target: str, ebeam: float, x: float, Q2: float,
-                  z: float, thpq: float, run_type: str) -> str:
+                  z: float, thpq: float, run_type: str,
+                  process: str | None = DEFAULT_PROCESS) -> str:
     particle = "pip" if run_type == "PI+SIDIS" else "pim"
     return (f"{target}_{particle}"
             f"_e{_fenc(ebeam,1)}_x{_fenc(x,2)}_q2{_fenc(Q2,1)}"
-            f"_z{_fenc(z,2)}_thpq{_fenc(thpq,1)}")
+            f"_z{_fenc(z,2)}{_process_tag(process)}"
+            f"_thpq{_fenc(thpq,1)}")
 
 
 def _base_stem(target: str, ebeam: float, x: float, Q2: float,
-               z: float, run_type: str) -> str:
+               z: float, run_type: str,
+               process: str | None = DEFAULT_PROCESS) -> str:
     particle = "pip" if run_type == "PI+SIDIS" else "pim"
     return (f"{target}_{particle}"
             f"_e{_fenc(ebeam,1)}_x{_fenc(x,2)}_q2{_fenc(Q2,1)}"
-            f"_z{_fenc(z,2)}_base")
+            f"_z{_fenc(z,2)}{_process_tag(process)}_base")
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +218,13 @@ histograms:
     xmax:    4.0
     xlabel: "W (GeV)"
 
+  - name:   mmass
+    branch: mmass
+    bins:   100
+    xmin:   0.0
+    xmax:   5.0
+    xlabel: '$M_{miss}$ (GeV)'
+
   - name:   Q2
     branch: H_kin_primary_Q2
     bins:   50
@@ -259,14 +295,35 @@ histograms:
 """
 
 
+def _kinematic_cuts_yaml(process: str | None) -> str:
+    """Process-dependent kinematic cuts. W stays the nominal wide cut."""
+    process = _normalize_process(process)
+    if process == "exclusive":
+        mmass_lo, mmass_hi = 0.85, 1.05
+    else:
+        mmass_lo, mmass_hi = 1.5, 100.0
+
+    return f"""\
+  # Kinematic cuts
+  W_lo: 2.0    # GeV
+  W_hi: 100    # GeV
+  mmass_lo: {mmass_lo:g}   # GeV
+  mmass_hi: {mmass_hi:g}   # GeV
+"""
+
+
 def _make_base_yaml(target: str, ebeam: float, x: float,
-                    Q2: float, z: float, run_type: str) -> str:
-    base_name = _base_stem(target, ebeam, x, Q2, z, run_type)
+                    Q2: float, z: float, run_type: str,
+                    process: str | None = DEFAULT_PROCESS) -> str:
+    process = _normalize_process(process)
+    base_name = _base_stem(target, ebeam, x, Q2, z, run_type, process)
     cryo      = target in CRYO_TARGETS
+    process_line = "" if process == DEFAULT_PROCESS else f"# Process: {process}\n"
     return f"""\
 # ============================================================
 # RSIDIS SSA base configuration — {target}, {run_type}
 # Kinematic point: e={ebeam}, x={x}, Q2={Q2}, z={z}
+{process_line.rstrip()}
 #
 # THIS FILE IS A BASE — do not pass it directly to analysis.py.
 # Use a daughter YAML that specifies _base and overrides thpq:
@@ -303,6 +360,9 @@ runlist:
 normalization:
   charge_column:  BCM2_Q
   weight_scheme:  charge_only
+  use_helicity_gated_charge: true
+  charge_hp_column: BCM2_Q_hp
+  charge_hm_column: BCM2_Q_hm
 
 cuts:
   # HMS electron PID
@@ -319,6 +379,7 @@ cuts:
   phgc_p_threshold: 2.9   # GeV/c — require HGC only above this momentum
   psshsum_max:    0.8
 
+{_kinematic_cuts_yaml(process)}
   # Coincidence time — real peak
   ctime_real_center:          auto
   ctime_real_nsigma:          null
@@ -379,26 +440,37 @@ def _write_file(path: Path, content: str, force: bool, dry_run: bool) -> None:
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def step_generate(df: pd.DataFrame, force: bool, dry_run: bool) -> None:
+def step_generate(
+    df: pd.DataFrame,
+    force: bool,
+    dry_run: bool,
+    process: str | None = DEFAULT_PROCESS,
+) -> None:
     CONFIG_DIR.mkdir(exist_ok=True)
     for keys, group in df.groupby(_FAMILY_COLS):
         target, ebeam, x, Q2, z, run_type = keys
         thpq_list = sorted(group["thpq"].tolist())
 
-        base_path = CONFIG_DIR / f"{_base_stem(target, ebeam, x, Q2, z, run_type)}.yaml"
-        _write_file(base_path, _make_base_yaml(target, ebeam, x, Q2, z, run_type),
+        base_path = CONFIG_DIR / f"{_base_stem(target, ebeam, x, Q2, z, run_type, process)}.yaml"
+        _write_file(base_path, _make_base_yaml(target, ebeam, x, Q2, z, run_type, process),
                     force, dry_run)
 
         for thpq in thpq_list:
-            override_path = CONFIG_DIR / f"{_setting_stem(target, ebeam, x, Q2, z, thpq, run_type)}.yaml"
+            override_path = CONFIG_DIR / f"{_setting_stem(target, ebeam, x, Q2, z, thpq, run_type, process)}.yaml"
             _write_file(override_path, _make_override_yaml(base_path.name, thpq),
                         force, dry_run)
 
 
-def step_analyze(df: pd.DataFrame, force: bool, dry_run: bool, verbose: bool = False) -> None:
+def step_analyze(
+    df: pd.DataFrame,
+    force: bool,
+    dry_run: bool,
+    verbose: bool = False,
+    process: str | None = DEFAULT_PROCESS,
+) -> None:
     for _, row in df.iterrows():
         stem        = _setting_stem(row.target, row.ebeam, row.x, row.Q2, row.z,
-                                    row.thpq, row.run_type)
+                                    row.thpq, row.run_type, process)
         config_path = CONFIG_DIR / f"{stem}.yaml"
         output_csv  = OUTPUT_DIR / stem / f"{stem}.csv"
 
@@ -416,18 +488,24 @@ def step_analyze(df: pd.DataFrame, force: bool, dry_run: bool, verbose: bool = F
         _run(cmd, dry_run)
 
 
-def step_combine(df: pd.DataFrame, binned: bool, force: bool, dry_run: bool) -> None:
+def step_combine(
+    df: pd.DataFrame,
+    binned: bool,
+    force: bool,
+    dry_run: bool,
+    process: str | None = DEFAULT_PROCESS,
+) -> None:
     for keys, group in df.groupby(_FAMILY_COLS):
         target, ebeam, x, Q2, z, run_type = keys
         thpq_list = sorted(group["thpq"].tolist())
         particle  = "pip" if run_type == "PI+SIDIS" else "pim"
 
         if len(thpq_list) < 2:
-            stem = _base_stem(target, ebeam, x, Q2, z, run_type)
+            stem = _base_stem(target, ebeam, x, Q2, z, run_type, process)
             print(f"  SKIP (1 thpq)     {stem}")
             continue
 
-        base_path = CONFIG_DIR / f"{_base_stem(target, ebeam, x, Q2, z, run_type)}.yaml"
+        base_path = CONFIG_DIR / f"{_base_stem(target, ebeam, x, Q2, z, run_type, process)}.yaml"
         if not base_path.exists():
             print(f"  SKIP (no base)    {base_path.name}")
             continue
@@ -435,7 +513,7 @@ def step_combine(df: pd.DataFrame, binned: bool, force: bool, dry_run: bool) -> 
         thpq_enc = "AND".join(_fenc(t, 1) for t in thpq_list)
         out_base = (f"{target}_{particle}"
                     f"_e{_fenc(ebeam,1)}_x{_fenc(x,2)}_q2{_fenc(Q2,1)}"
-                    f"_z{_fenc(z,2)}_thpq{thpq_enc}")
+                    f"_z{_fenc(z,2)}{_process_tag(process)}_thpq{thpq_enc}")
 
         for is_binned in ([False, True] if binned else [False]):
             suffix  = "_binned" if is_binned else ""
@@ -485,6 +563,14 @@ def main() -> None:
         help="Filter to thpq value(s): -0.8 2.0 5.2",
     )
     parser.add_argument(
+        "--process", default=DEFAULT_PROCESS, metavar="PROCESS",
+        help=(
+            "Parallel analysis process name. Default 'sidis' preserves existing "
+            "filenames; e.g. --process exclusive writes *_exclusive_* configs "
+            "and outputs."
+        ),
+    )
+    parser.add_argument(
         "--binned", action="store_true",
         help="Also combine binned (_binned.csv) results in the combine step",
     )
@@ -517,15 +603,15 @@ def main() -> None:
 
     if "generate" in args.steps:
         print("\n── generate configs ─────────────────────────────────────────")
-        step_generate(df, args.force, args.dry_run)
+        step_generate(df, args.force, args.dry_run, args.process)
 
     if "analyze" in args.steps:
         print("\n── analyze ──────────────────────────────────────────────────")
-        step_analyze(df, args.force, args.dry_run, args.verbose)
+        step_analyze(df, args.force, args.dry_run, args.verbose, args.process)
 
     if "combine" in args.steps:
         print("\n── combine ──────────────────────────────────────────────────")
-        step_combine(df, args.binned, args.force, args.dry_run)
+        step_combine(df, args.binned, args.force, args.dry_run, args.process)
 
 
 if __name__ == "__main__":
