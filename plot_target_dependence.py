@@ -2,9 +2,9 @@
 """
 Compare SSA across targets and compute differences from a reference target.
 
-Reads all *_binned_summary.csv files in output/combined/ and produces a
-multi-page PDF.  π⁺ and π⁻ are overlaid on the same panels with distinct
-colours and markers.  Without --epsilon, pages cover A_LU^sinφ only.
+Reads process-matched *_binned_summary.csv files in output/combined/ and
+produces a multi-page PDF.  π⁺ and π⁻ are overlaid on the same panels with
+distinct colours and markers.  Without --epsilon, pages cover A_LU^sinφ only.
 With --epsilon, additional pages show F_LU^sinφ/F_UU:
 
     F_LU^sinφ / F_UU = A_LU^sinφ / sqrt(2 ε (1-ε))
@@ -21,6 +21,7 @@ Must be run from the project root.
 Usage
 -----
     python plot_target_dependence.py
+    python plot_target_dependence.py --process exclusive
     python plot_target_dependence.py --epsilon 0.7
     python plot_target_dependence.py --epsilon 0.7 \\
         --ylim -0.02 0.12  --ylim-diff -0.06 0.06 \\
@@ -31,6 +32,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -42,6 +44,7 @@ import pandas as pd
 
 COMBINED_DIR  = Path("output/combined")
 PLOTS_DIR     = Path("output/plots")
+DEFAULT_PROCESS = "sidis"
 
 _TARGET_ORDER = ["LH2", "LD2", "C", "Cu", "Al"]   # preferred display order
 
@@ -60,17 +63,79 @@ _PARTICLE_STYLES = {
 # Data loading
 # ---------------------------------------------------------------------------
 
-def _load_all(variable: str) -> pd.DataFrame:
-    """Load all *_binned_summary.csv files, both particles."""
+def _normalize_process(process: str | None) -> str:
+    """Normalize process names the same way run_pipeline.py does."""
+    if process is None:
+        return DEFAULT_PROCESS
+    process = process.strip().lower()
+    return process or DEFAULT_PROCESS
+
+
+def _process_tag(process: str | None) -> str:
+    """Return the filename tag for a parallel analysis process."""
+    process = _normalize_process(process)
+    if process == DEFAULT_PROCESS:
+        return ""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_]*", process):
+        raise ValueError(
+            "process must contain only lowercase letters, digits, and underscores "
+            "and must start with a letter or digit"
+        )
+    return f"_{process}"
+
+
+def _process_from_filename(path: Path) -> str:
+    """Infer process from combined-summary filename; untagged means sidis."""
+    stem = path.name.removesuffix("_binned_summary.csv")
+    match = re.search(r"_z[^_]+(?:_(?P<process>.+))?_thpq", stem)
+    if match is None:
+        return DEFAULT_PROCESS
+    return _normalize_process(match.group("process"))
+
+
+def _combined_summary_files(process: str) -> list[Path]:
+    """Find combined binned summary CSVs for one analysis process."""
+    process = _normalize_process(process)
+    return [
+        csv for csv in sorted(COMBINED_DIR.glob("*_binned_summary.csv"))
+        if _process_from_filename(csv) == process
+    ]
+
+
+def _available_processes() -> list[str]:
+    """List processes visible in combined binned summaries."""
+    processes = {
+        _process_from_filename(csv)
+        for csv in COMBINED_DIR.glob("*_binned_summary.csv")
+    }
+    return sorted(processes)
+
+
+def _default_output(process: str) -> Path:
+    tag = _process_tag(process)
+    return PLOTS_DIR / f"target_dependence{tag}.pdf"
+
+
+def _load_all(variable: str, process: str) -> pd.DataFrame:
+    """Load process-matched *_binned_summary.csv files, both particles."""
+    process = _normalize_process(process)
     frames = []
-    for csv in sorted(COMBINED_DIR.glob("*_binned_summary.csv")):
+    files = _combined_summary_files(process)
+    for csv in files:
         df  = pd.read_csv(csv)
+        if "process" in df.columns:
+            df = df[df["process"].fillna(DEFAULT_PROCESS).map(_normalize_process) == process]
+        df = df.copy()
+        df["process"] = process
         sub = df[df["variable"] == variable]
         if not sub.empty:
             frames.append(sub)
     if not frames:
+        available = ", ".join(_available_processes()) or "none"
         raise FileNotFoundError(
-            f"No *_binned_summary.csv files found in {COMBINED_DIR}"
+            f"No *_binned_summary.csv rows found in {COMBINED_DIR} "
+            f"for process={process!r}, variable={variable!r}; "
+            f"available processes: {available}"
         )
     return pd.concat(frames, ignore_index=True)
 
@@ -121,8 +186,10 @@ def _page_suptitle(df: pd.DataFrame, qty: str,
     x   = df["x"].iloc[0]
     q2  = df["q2"].iloc[0]
     eps = f",  $\\varepsilon = {epsilon:.3f}$" if epsilon is not None else ""
+    process = df["process"].iloc[0] if "process" in df.columns else DEFAULT_PROCESS
+    proc = f",  process = {process}" if process != DEFAULT_PROCESS else ""
     return (f"${qty}${suffix} — "
-            f"$x = {x:.2f}$,  $Q^2 = {q2:.1f}$ GeV$^2${eps}")
+            f"$x = {x:.2f}$,  $Q^2 = {q2:.1f}$ GeV$^2${eps}{proc}")
 
 
 def _ylabel(qty: str, target: str | None, diff_ref: str | None) -> str:
@@ -467,6 +534,10 @@ def main() -> None:
         "--variable", default="pt", metavar="VAR",
         help="Binning variable in summary CSV (default: pt)",
     )
+    parser.add_argument(
+        "--process", default=DEFAULT_PROCESS, metavar="NAME",
+        help="Analysis process to plot (default: sidis; e.g. exclusive)",
+    )
     # ── A_LU ylim ────────────────────────────────────────────────────────────
     parser.add_argument(
         "--ylim", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
@@ -507,12 +578,17 @@ def main() -> None:
     # ── output ───────────────────────────────────────────────────────────────
     parser.add_argument(
         "--output", default=None, metavar="PDF",
-        help="Output PDF (default: output/plots/target_dependence.pdf)",
+        help="Output PDF (default: output/plots/target_dependence[_process].pdf)",
     )
     args = parser.parse_args()
 
     if args.epsilon is not None and not (0.0 < args.epsilon < 1.0):
         parser.error("--epsilon must be in (0, 1)")
+    try:
+        process = _normalize_process(args.process)
+        _process_tag(process)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     ylim          = tuple(args.ylim)          if args.ylim          else None
     ylim_diff     = tuple(args.ylim_diff)     if args.ylim_diff     else None
@@ -521,7 +597,7 @@ def main() -> None:
     ylim_zavg_diff     = tuple(args.ylim_zavg_diff)     if args.ylim_zavg_diff     else ylim_diff
     ylim_flu_zavg_diff = tuple(args.ylim_flu_zavg_diff) if args.ylim_flu_zavg_diff else ylim_flu_diff
 
-    df_all  = _load_all(args.variable)
+    df_all  = _load_all(args.variable, process)
     targets = _ordered_targets(df_all, args.targets)
     bins    = _pt_bins(df_all)
 
@@ -530,7 +606,7 @@ def main() -> None:
         return
 
     out = (Path(args.output) if args.output
-           else PLOTS_DIR / "target_dependence.pdf")
+           else _default_output(process))
     out.parent.mkdir(parents=True, exist_ok=True)
 
     diff_targets = [t for t in targets if t != args.reference]
