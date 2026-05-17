@@ -38,6 +38,7 @@ from rsidis_ssa.cuts import (
     BRANCH_PSDELTA,
     BRANCH_PETOTTRACKNORM,
     BRANCH_THETA_PQ,
+    BRANCH_MMASS,
 )
 
 

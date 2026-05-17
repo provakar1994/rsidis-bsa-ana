@@ -63,6 +63,8 @@ BRANCH_HELICITY = "T_helicity_hel"      # +1 or −1 (or ±0.5 in some replay ve
 BRANCH_PPi      = "P_gtr_p"                  # SHMS pion momentum [GeV/c]
 BRANCH_NU       = "H_kin_primary_nu"          # Virtual-photon energy ν [GeV]
 BRANCH_THETA_PQ = "P_kin_secondary_th_xq"    # θ_pq [rad]
+BRANCH_W        = "H_kin_primary_W"           # Invariant mass W [GeV]
+BRANCH_MMASS    = "mmass"                    # e−pi missing mass [GeV]
 
 # Pion mass [GeV/c²]
 M_PI = 0.13957018
@@ -155,6 +157,10 @@ def pid_mask(arrays: dict[str, np.ndarray], cuts_cfg: CutsConfig) -> np.ndarray:
         & (arrays[BRANCH_PAERO_NPE] >= cuts_cfg.paero_npe_min)
         & hgc_cut
         & (arrays[BRANCH_PETOTTRACKNORM]   <= cuts_cfg.psshsum_max)
+        & (arrays[BRANCH_W]           >= cuts_cfg.W_lo)
+        & (arrays[BRANCH_W]           <= cuts_cfg.W_hi)
+        & (arrays[BRANCH_MMASS]       >= cuts_cfg.mmass_lo)
+        & (arrays[BRANCH_MMASS]       <= cuts_cfg.mmass_hi)
     )
 
 

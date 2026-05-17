@@ -239,6 +239,12 @@ class CutsConfig(BaseModel):
     phgc_p_threshold: Optional[float] = None  # GeV/c; null → unconditional HGC cut
     psshsum_max:   float   # SHMS calorimeter E/p upper cut (pion rejection)
 
+    # kinematic cuts
+    W_lo: float
+    W_hi: float
+    mmass_lo: float
+    mmass_hi: float
+
     # Coincidence time — real peak
     ctime_real_center:          _CtimeCenter
     ctime_real_nsigma:          Optional[float]   # null → always use ctime_real_window_fallback

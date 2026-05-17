@@ -1620,7 +1620,8 @@ def _page_statistics(
     hgc_thr = (f"{cuts.phgc_p_threshold:.2f} GeV"
                if cuts.phgc_p_threshold is not None else "unconditional")
     c1_cols = ["HMS δ [%]", "SHMS δ [%]", "HCer NPE",
-               "SHSsum", "Aero NPE", "HGC NPE", "SHScal E/p", "HGC thr"]
+               "HMS E/p", "Aero NPE", "HGC NPE", "HGC thr", "SHMS E/p",
+               "W [GeV]", "MMass [GeV]"]
     c1_rows = [[
         f"{cuts.hsdelta_lo:.1f} → {cuts.hsdelta_hi:.1f}",
         f"{cuts.psdelta_lo:.1f} → {cuts.psdelta_hi:.1f}",
@@ -1628,8 +1629,10 @@ def _page_statistics(
         f"> {cuts.hsshsum_min:.2f}",
         f"> {cuts.paero_npe_min:.1f}",
         f"> {cuts.phgc_npe_min:.1f}",
-        f"< {cuts.psshsum_max:.2f}",
         hgc_thr,
+        f"< {cuts.psshsum_max:.2f}",
+        f"{cuts.W_lo:.1f} → {cuts.W_hi:.1f}",
+        f"{cuts.mmass_lo:.1f} → {cuts.mmass_hi:.1f}",
     ]]
     tbl_c1 = ax2.table(cellText=c1_rows, colLabels=c1_cols,
                        loc="upper center", bbox=[0, 0.52, 1.0, 0.44])
