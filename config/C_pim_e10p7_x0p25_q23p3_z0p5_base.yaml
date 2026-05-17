@@ -56,6 +56,12 @@ cuts:
   phgc_p_threshold: 2.9   # GeV/c — require HGC only above this momentum
   psshsum_max:    0.8
 
+  # Kinematic cuts
+  W_lo: 2.0    # GeV
+  W_hi: 100    # GeV
+  mmass_lo: 1.5   # GeV
+  mmass_hi: 100   # GeV
+
   # Coincidence time — real peak
   ctime_real_center:          auto
   ctime_real_nsigma:          null
@@ -146,6 +152,13 @@ histograms:
     xmin:    2.0
     xmax:    4.0
     xlabel: "W (GeV)"
+
+  - name:   mmass
+    branch: mmass
+    bins:   100
+    xmin:   0.0
+    xmax:   5.0
+    xlabel: '$M_{miss}$ (GeV)'
 
   - name:   Q2
     branch: H_kin_primary_Q2

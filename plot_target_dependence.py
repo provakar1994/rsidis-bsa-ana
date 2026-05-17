@@ -588,6 +588,9 @@ if __name__ == "__main__":
 
 # Example command lines:
 # x = 0.25, Q² = 3.3 GeV²:
-#  python plot_target_dependence.py --epsilon 0.59 \
+# python plot_target_dependence.py --epsilon 0.59 \
 #     --ylim -0.062 0.122 --ylim-diff -0.09 0.12 \
 #     --ylim-flu -0.082 0.182 --ylim-flu-diff -0.12 0.18
+# python plot_target_dependence.py --epsilon 0.59 \
+#     --ylim -0.062 0.122 --ylim-diff -0.09 0.12 \
+#     --ylim-flu -0.082 0.182 --ylim-flu-diff -0.12 0.18 --z-avg 0.5 0.67 0.9 --ylim-flu-zavg-diff -0.06 0.11
