@@ -367,6 +367,7 @@ def _fig_zavg_diff(
     for r, target in enumerate(targets):
         ax        = axes[r, 0]
         is_bottom = (r == n_rows - 1)
+        is_top    = (r == 0)
 
         for particle, style in _PARTICLE_STYLES.items():
             grp = (df_diff[(df_diff["target"]   == target)
@@ -390,6 +391,11 @@ def _fig_zavg_diff(
                 fontsize=9, fontweight="bold")
         ax.set_ylabel(_ylabel(qty, target, diff_ref), fontsize=8)
         _ax_style(ax, xlabel=is_bottom, ylabel=True)
+
+        if is_top:
+            ax.text(0.05, 0.95,
+                    f"$\\langle z \\rangle$ = {np.mean(z_vals):.2f}",
+                    transform=ax.transAxes, va="top", ha="left", fontsize=9)        
 
         if is_bottom:
             ax.set_xlabel(r"$\langle P_T \rangle$ (GeV/$c$)", fontsize=10)
