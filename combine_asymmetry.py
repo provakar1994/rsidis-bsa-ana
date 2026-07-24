@@ -260,7 +260,8 @@ _INPUT_COLORS = [
     "purple",    "sienna", "teal",     "crimson",
 ]
 
-_ZOOM_LO, _ZOOM_HI = -0.1, 0.1
+#_ZOOM_LO, _ZOOM_HI = -0.1, 0.1
+_ZOOM_LO, _ZOOM_HI = -0.2, 0.2
 
 
 def _draw_phi_panels(
