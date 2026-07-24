@@ -299,7 +299,7 @@ def _kinematic_cuts_yaml(process: str | None) -> str:
     """Process-dependent kinematic cuts. W stays the nominal wide cut."""
     process = _normalize_process(process)
     if process == "exclusive":
-        mmass_lo, mmass_hi = 0.85, 1.05
+        mmass_lo, mmass_hi = 0, 1.05
     else:
         mmass_lo, mmass_hi = 1.5, 100.0
 
