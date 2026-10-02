@@ -206,6 +206,23 @@ python combine_asymmetry.py \
 Summary CSVs include a `process` column (`sidis` for nominal files,
 `exclusive` for the exclusive stream).
 
+Asymmetry CSVs also include diagnostic `N_plus` and `N_minus` counts for
+effective helicity. These are signal-sample event counts after scaled random
+subtraction, before charge normalization, e⁺ subtraction, or dummy subtraction.
+They can be fractional or negative. The asymmetry and its uncertainty still
+come from the weighted, background-subtracted histograms.
+
+Combined counts sum only rows with a finite asymmetry and a finite, positive
+uncertainty. Missing count values remain unknown (`NaN`), including in summary
+totals. When any input CSV lacks count columns, combined bin CSVs omit those
+columns and summary counts are unknown. Single-setting summary counts include
+all φ bins, so their totals need not equal the contributing-bin combined totals.
+
+Generated `output/` and `backup_output_*/` directories are ignored by Git;
+keep any desired result snapshots separately. The local Phase II ROOT-file link
+and independent `simulation/simc_gfortran/` checkout are also ignored. See
+`simulation/README.md` for the simulation source location.
+
 ---
 
 ## Visualization Scripts

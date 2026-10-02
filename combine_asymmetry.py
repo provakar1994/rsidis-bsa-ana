@@ -168,11 +168,17 @@ def _kin_header(inputs: list[tuple[str, pd.DataFrame]]) -> tuple[dict, str]:
 # ---------------------------------------------------------------------------
 
 _BINNED_COLS = {"variable", "hmin", "hmax", "bin_center"}
+_COUNT_COLS = ("N_plus", "N_minus")
 
 
 def _is_binned_csv(df: pd.DataFrame) -> bool:
     """Return True when *df* has the extra columns produced by binned-mode analysis."""
     return _BINNED_COLS.issubset(df.columns)
+
+
+def _has_count_cols(df: pd.DataFrame) -> bool:
+    """Return True when per-bin unweighted helicity-count columns are present."""
+    return all(col in df.columns for col in _COUNT_COLS)
 
 
 # ---------------------------------------------------------------------------
@@ -185,10 +191,15 @@ def combine_bins(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     grouped by (histogram, phi_center).
 
     Bins where A_phys_err is zero or non-finite are dropped before averaging.
+    Counts sum only contributing rows; any missing count keeps the total unknown.
     """
     all_rows = pd.concat(dfs, ignore_index=True)
     all_rows["A_phys"]     = pd.to_numeric(all_rows["A_phys"],     errors="coerce")
     all_rows["A_phys_err"] = pd.to_numeric(all_rows["A_phys_err"], errors="coerce")
+    has_counts = all(_has_count_cols(df) for df in dfs)
+    if has_counts:
+        for col in _COUNT_COLS:
+            all_rows[col] = pd.to_numeric(all_rows[col], errors="coerce")
 
     ok = (np.isfinite(all_rows["A_phys"])
           & np.isfinite(all_rows["A_phys_err"])
@@ -200,10 +211,17 @@ def combine_bins(dfs: list[pd.DataFrame]) -> pd.DataFrame:
         inv_var = 1.0 / grp["A_phys_err"].values**2
         A_comb  = float(np.sum(grp["A_phys"].values * inv_var) / np.sum(inv_var))
         dA_comb = float(1.0 / np.sqrt(np.sum(inv_var)))
-        records.append({"histogram": hname, "phi_center": phi,
-                        "A_phys": A_comb, "A_phys_err": dA_comb})
+        record = {"histogram": hname, "phi_center": phi,
+                  "A_phys": A_comb, "A_phys_err": dA_comb}
+        if has_counts:
+            record["N_plus"] = float(grp["N_plus"].sum(skipna=False))
+            record["N_minus"] = float(grp["N_minus"].sum(skipna=False))
+        records.append(record)
 
-    return pd.DataFrame(records, columns=["histogram", "phi_center", "A_phys", "A_phys_err"])
+    cols = ["histogram", "phi_center", "A_phys", "A_phys_err"]
+    if has_counts:
+        cols += list(_COUNT_COLS)
+    return pd.DataFrame(records, columns=cols)
 
 
 # ---------------------------------------------------------------------------
@@ -215,12 +233,17 @@ def combine_bins_binned(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     Inverse-variance weighted average for binned CSVs, grouped by
     (variable, hmin, hmax, histogram, phi_center).
 
+    Counts sum only contributing rows; any missing count keeps the total unknown.
     bin_center is taken from the first contributing row per group (all rows
     with the same hmin/hmax share the same center by construction).
     """
     all_rows = pd.concat(dfs, ignore_index=True)
     for col in ("A_phys", "A_phys_err", "hmin", "hmax", "bin_center"):
         all_rows[col] = pd.to_numeric(all_rows[col], errors="coerce")
+    has_counts = all(_has_count_cols(df) for df in dfs)
+    if has_counts:
+        for col in _COUNT_COLS:
+            all_rows[col] = pd.to_numeric(all_rows[col], errors="coerce")
 
     ok = (np.isfinite(all_rows["A_phys"])
           & np.isfinite(all_rows["A_phys_err"])
@@ -245,9 +268,14 @@ def combine_bins_binned(dfs: list[pd.DataFrame]) -> pd.DataFrame:
             "A_phys":     A_comb,
             "A_phys_err": dA_comb,
         })
+        if has_counts:
+            records[-1]["N_plus"] = float(grp["N_plus"].sum(skipna=False))
+            records[-1]["N_minus"] = float(grp["N_minus"].sum(skipna=False))
 
     cols = ["variable", "hmin", "hmax", "bin_center",
             "histogram", "phi_center", "A_phys", "A_phys_err"]
+    if has_counts:
+        cols += list(_COUNT_COLS)
     return pd.DataFrame(records, columns=cols)
 
 
@@ -552,10 +580,13 @@ def _write_combined_summary(
             "asym_err":  amp_err  if np.isfinite(amp_err)  else np.nan,
             "chi2_ndf":  chi2_ndf if np.isfinite(chi2_ndf) else np.nan,
             "n_bins":    n_used,
+            "N_plus":    grp["N_plus"].sum(skipna=False)  if "N_plus"  in grp.columns else np.nan,
+            "N_minus":   grp["N_minus"].sum(skipna=False) if "N_minus" in grp.columns else np.nan,
         })
 
     cols = ["target", "particle", "ebeam", "x", "q2", "z", "process", "thpq",
-            "histogram", "asym", "asym_err", "chi2_ndf", "n_bins"]
+            "histogram", "asym", "asym_err", "chi2_ndf", "n_bins",
+            "N_plus", "N_minus"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
     logger.info("Kinematic summary → %s", path)
 
@@ -594,11 +625,13 @@ def _write_combined_binned_summary(
             "asym_err":   amp_err  if np.isfinite(amp_err)  else np.nan,
             "chi2_ndf":   chi2_ndf if np.isfinite(chi2_ndf) else np.nan,
             "n_bins":     n_used,
+            "N_plus":     grp["N_plus"].sum(skipna=False)  if "N_plus"  in grp.columns else np.nan,
+            "N_minus":    grp["N_minus"].sum(skipna=False) if "N_minus" in grp.columns else np.nan,
         })
 
     cols = ["target", "particle", "ebeam", "x", "q2", "z", "process", "thpq",
             "variable", "hmin", "hmax", "bin_center", "histogram",
-            "asym", "asym_err", "chi2_ndf", "n_bins"]
+            "asym", "asym_err", "chi2_ndf", "n_bins", "N_plus", "N_minus"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
     logger.info("Kinematic summary → %s", path)
 

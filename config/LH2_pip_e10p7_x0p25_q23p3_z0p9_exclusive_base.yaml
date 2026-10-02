@@ -1,0 +1,230 @@
+# ============================================================
+# RSIDIS SSA base configuration — LH2, PI+SIDIS
+# Kinematic point: e=10.6716, x=0.25, Q2=3.3, z=0.9
+# Process: exclusive
+#
+# THIS FILE IS A BASE — do not pass it directly to analysis.py.
+# Use a daughter YAML that specifies _base and overrides thpq:
+#
+#   _base: LH2_pip_e10p7_x0p25_q23p3_z0p9_exclusive_base.yaml
+#   setting:
+#     thpq: <value>
+# ============================================================
+
+setting:
+  ebeam:    10.6716
+  x:        0.25
+  Q2:       3.3
+  z:        0.9
+  thpq:     0.0        # placeholder — must be overridden in daughter
+  run_type: PI+SIDIS
+
+target: LH2
+run_period: period_1
+do_eplus_subtraction: true
+do_dummy_subtraction: true
+
+runs_include: null
+runs_exclude: []
+
+rootfiles:
+  directory:  ../data/rootfiles_pass0p1
+  pattern:    skimmed_coin_replay_production_{run}_-1.root
+  treename:   T
+
+runlist:
+  csv: ../data/rsidis_bigtable_pass0p1.csv
+
+normalization:
+  charge_column:  BCM2_Q
+  weight_scheme:  charge_only
+  use_helicity_gated_charge: true
+  charge_hp_column: BCM2_Q_hp
+  charge_hm_column: BCM2_Q_hm
+
+cuts:
+  # HMS electron PID
+  hsdelta_lo:    -8.0    # %
+  hsdelta_hi:     8.0    # %
+  hcer_npe_min:   1.0
+  hsshsum_min:    0.7
+
+  # SHMS pion PID
+  psdelta_lo:   -10.0    # %
+  psdelta_hi:    20.0    # %
+  paero_npe_min:  2.0
+  phgc_npe_min:   1.0
+  phgc_p_threshold: 2.9   # GeV/c — require HGC only above this momentum
+  psshsum_max:    0.8
+
+  # Kinematic cuts
+  W_lo: 2.0    # GeV
+  W_hi: 100    # GeV
+  mmass_lo: 0   # GeV
+  mmass_hi: 1.05   # GeV
+
+  # Coincidence time — real peak
+  ctime_real_center:          auto
+  ctime_real_nsigma:          null
+  ctime_real_window_fallback: 2.0
+
+  # Coincidence time — random sideband
+  ctime_random_n_skip:     1
+  ctime_random_n_peaks_lo: 6
+  ctime_random_n_peaks_hi: 0
+
+histograms:
+  # HMS acceptance
+  - name:   hsp
+    branch: H_gtr_p
+    bins:   50
+    xmin:   2.0
+    xmax:   5.0
+    xlabel: 'HMS p (GeV/c)'
+
+  - name:   hsdelta
+    branch: H_gtr_dp
+    bins:   16
+    xmin:   -8.0
+    xmax:    8.0
+    xlabel: 'HMS $\delta$ (%)'
+
+  - name:   hsxptar
+    branch: H_gtr_th
+    bins:   50
+    xmin:   -0.1
+    xmax:    0.1
+    xlabel: "HMS xptar (rad)"
+
+  - name:   hsyptar
+    branch: H_gtr_ph
+    bins:   50
+    xmin:   -0.06
+    xmax:    0.06
+    xlabel: "HMS yptar (rad)"
+
+  - name:   hsytar
+    branch: H_gtr_y
+    bins:   50
+    xmin:   -5.0
+    xmax:    5.0
+    xlabel: "HMS ytar (cm)"
+
+  # SHMS acceptance
+  - name:   psp
+    branch: P_gtr_p
+    bins:   50
+    xmin:   2.0
+    xmax:   5.0
+    xlabel: 'SHMS p (GeV/c)'
+
+  - name:   psdelta
+    branch: P_gtr_dp
+    bins:   30
+    xmin:   -10.0
+    xmax:    20.0
+    xlabel: 'SHMS $\delta$ (%)'
+
+  - name:   psxptar
+    branch: P_gtr_th
+    bins:   50
+    xmin:   -0.1
+    xmax:    0.1
+    xlabel: "SHMS xptar (rad)"
+
+  - name:   psyptar
+    branch: P_gtr_ph
+    bins:   50
+    xmin:   -0.06
+    xmax:    0.06
+    xlabel: "SHMS yptar (rad)"
+
+  - name:   psytar
+    branch: P_gtr_y
+    bins:   50
+    xmin:   -5.0
+    xmax:    5.0
+    xlabel: "SHMS ytar (cm)"
+
+  # Physics quantities
+  - name:   W
+    branch: H_kin_primary_W
+    bins:   50
+    xmin:    2.0
+    xmax:    4.0
+    xlabel: "W (GeV)"
+
+  - name:   mmass
+    branch: mmass
+    bins:   100
+    xmin:   0.0
+    xmax:   5.0
+    xlabel: '$M_{miss}$ (GeV)'
+
+  - name:   Q2
+    branch: H_kin_primary_Q2
+    bins:   50
+    xmin:    2.0
+    xmax:    6.0
+    xlabel: '$Q^{2}$ (GeV$^{2}$)'
+
+  - name:   xbj
+    branch: H_kin_primary_x_bj
+    bins:   50
+    xmin:    0.1
+    xmax:    0.4
+    xlabel: '$x_{Bj}$'
+
+  - name:   zhad
+    branch: z
+    bins:   45
+    xmin:    0.1
+    xmax:    1.0
+    xlabel: '$z_{had}$'
+
+  - name:   Pt
+    branch: pt
+    bins:   50
+    xmin:    0.0
+    xmax:    0.5
+    xlabel: '$P_T$ (GeV/c)'
+
+  # Azimuthal angle (full + helicity-split)
+  - name:   phipq
+    branch: P_kin_secondary_ph_xq
+    bins:   9
+    xmin:   -3.14159265
+    xmax:    3.14159265
+    xlabel: '$\phi_{pq}$ (rad)'
+    bin_in:
+      branch: pt
+      edges: [0.0, 0.1, 0.2, 0.3]
+
+  - name:   phipq_hplus
+    branch: P_kin_secondary_ph_xq
+    bins:   9
+    xmin:   -3.14159265
+    xmax:    3.14159265
+    xlabel: '$\phi_{pq}$ (rad)  [$h^{+}$]'
+    helicity_cut: positive
+
+  - name:   phipq_hminus
+    branch: P_kin_secondary_ph_xq
+    bins:   9
+    xmin:   -3.14159265
+    xmax:    3.14159265
+    xlabel: '$\phi_{pq}$ (rad)  [$h^{-}$]'
+    helicity_cut: negative
+
+  # 2D histogram of Pt vs phi for acceptance studies
+  - name:     pt_vs_phi
+    branch:   ptx
+    bins:     50
+    xmin:     -0.5
+    xmax:     0.5
+    xlabel:   '$P_T\cos(\phi_{pq})$ (GeV/c)'
+    branch_y: pty
+    bins_y:   50
+    ymin:     -0.5
+    ymax:     0.5
+    ylabel:   '$P_T\sin(\phi_{pq})$ (GeV/c)'

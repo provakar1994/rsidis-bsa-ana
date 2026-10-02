@@ -282,6 +282,14 @@ class TestComputeAsymmetry:
         assert len(r.A_phys)      == n
         assert len(r.A_phys_err)  == n
 
+    def test_optional_counts_are_stored(self):
+        h_p, h_m = self._uniform_hists(n_bins=4)
+        N_plus = np.array([10, 20, 30, 40])
+        N_minus = np.array([11, 21, 31, 41])
+        r = compute_asymmetry(h_p, h_m, 0.85, "phipq", N_plus, N_minus)
+        np.testing.assert_array_equal(r.N_plus, N_plus)
+        np.testing.assert_array_equal(r.N_minus, N_minus)
+
 
 # ===========================================================================
 # find_asymmetry_pairs

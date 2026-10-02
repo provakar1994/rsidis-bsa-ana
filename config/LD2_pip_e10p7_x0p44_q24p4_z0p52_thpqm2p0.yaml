@@ -1,0 +1,5 @@
+# thpq = -2.0
+_base: LD2_pip_e10p7_x0p44_q24p4_z0p52_base.yaml
+
+setting:
+  thpq: -2.0

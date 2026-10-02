@@ -128,6 +128,10 @@ class PipelineResult:
     raw_helicity : dict[str, np.ndarray]
         Concatenated raw T_helicity_hel values (real-window events, all runs)
         per run type.  Keys are "signal", "eplus", "dummy" as applicable.
+    raw_counts : dict[str, FilledRegistries]
+        Unweighted event-count histograms per run type.  ``real`` is filled
+        with unit weights; ``random`` is filled with ``win_scale`` only, so
+        ``real - random`` gives random-subtracted unweighted counts.
     cfg : AnalysisConfig
         The config used for this run.
     """
@@ -144,6 +148,7 @@ class PipelineResult:
     run_dfs:           dict[str, pd.DataFrame]
     normyield_per_run: dict[str, pd.DataFrame]
     raw_helicity:      dict[str, np.ndarray]
+    raw_counts:        dict[str, FilledRegistries]
     cfg:               AnalysisConfig
 
 
@@ -209,7 +214,16 @@ def _fill_run_type(
     beam_bunch: float,
     config_dir: Optional[Path] = None,
     ctime_override: Optional[tuple[float, float]] = None,
-) -> tuple[FilledRegistries, list[int], bh.Histogram, list[tuple[float, float]], list[list[tuple[float, float]]], pd.DataFrame]:
+) -> tuple[
+    FilledRegistries,
+    list[int],
+    bh.Histogram,
+    list[tuple[float, float]],
+    list[list[tuple[float, float]]],
+    pd.DataFrame,
+    np.ndarray,
+    FilledRegistries,
+]:
     """
     Fill real + random registries for all valid runs in *df_runs*.
 
@@ -239,12 +253,19 @@ def _fill_run_type(
         normyield_workflow, normyield_csv, residual_pct, flagged.
         normyield_workflow = (n_real − n_random × win_scale) × weight_r,
         computed from this workflow's own event selection.
+    np.ndarray
+        Concatenated raw helicity values for real-window events.
+    FilledRegistries
+        Unweighted real/random count histograms.  Random entries include only
+        the coincidence-window scale factor.
     """
     eff_histo_cfgs = cfg.effective_histograms()
     branches = required_branches(eff_histo_cfgs, cfg.cuts)
     branches.add(BRANCH_HELICITY)   # always needed for per-run helicity diagnostics
     real_reg   = build_histogram_registry(eff_histo_cfgs)
     random_reg = build_histogram_registry(eff_histo_cfgs)
+    count_real_reg = build_histogram_registry(eff_histo_cfgs)
+    count_random_reg = build_histogram_registry(eff_histo_cfgs)
     ctime_hist = bh.Histogram(_CTIME_AXIS, storage=bh.storage.Double())
     raw_helicity_values: list[np.ndarray] = []   # raw T_helicity_hel for all runs
     run_windows:        list[tuple[float, float]]       = []
@@ -302,6 +323,8 @@ def _fill_run_type(
 
         fill_run(arrays, real_mask,   fill_weight,   real_reg,   eff_histo_cfgs, ihwp)
         fill_run(arrays, random_mask, random_weight, random_reg, eff_histo_cfgs, ihwp)
+        fill_run(arrays, real_mask,   1.0,           count_real_reg,   eff_histo_cfgs, ihwp)
+        fill_run(arrays, random_mask, win_scale,     count_random_reg, eff_histo_cfgs, ihwp)
 
         # Ctime diagnostic: fill with PID-only mask, unweighted
         p_mask = build_pid_mask(arrays, cfg.cuts)
@@ -435,7 +458,16 @@ def _fill_run_type(
     _log_normyield_table(ny_df, label)
 
     raw_hel_all = np.concatenate(raw_helicity_values) if raw_helicity_values else np.array([], dtype=float)
-    return FilledRegistries(real=real_reg, random=random_reg), file_skips, ctime_hist, run_windows, run_random_windows, ny_df, raw_hel_all
+    return (
+        FilledRegistries(real=real_reg, random=random_reg),
+        file_skips,
+        ctime_hist,
+        run_windows,
+        run_random_windows,
+        ny_df,
+        raw_hel_all,
+        FilledRegistries(real=count_real_reg, random=count_random_reg),
+    )
 
 
 def _log_normyield_table(ny_df: pd.DataFrame, label: str) -> None:
@@ -673,12 +705,14 @@ def run_pipeline(
     run_dfs:                  dict[str, pd.DataFrame]                    = {}
     normyield_per_run:        dict[str, pd.DataFrame]                    = {}
     raw_helicity:             dict[str, np.ndarray]                      = {}
+    raw_counts:               dict[str, FilledRegistries]                = {}
 
     (signal_regs, signal_skips,
      ctime_hists["signal"], ctime_run_windows["signal"],
      ctime_random_run_windows["signal"],
      normyield_per_run["signal"],
-     raw_helicity["signal"]) = (
+     raw_helicity["signal"],
+     raw_counts["signal"]) = (
         _fill_run_type(df_signal, weight_tables["signal"], cfg, "signal", beam_bunch, config_dir)
     )
     run_dfs["signal"] = df_signal
@@ -731,7 +765,8 @@ def run_pipeline(
              ctime_hists["eplus"], ctime_run_windows["eplus"],
              ctime_random_run_windows["eplus"],
              normyield_per_run["eplus"],
-             raw_helicity["eplus"]) = (
+             raw_helicity["eplus"],
+             raw_counts["eplus"]) = (
                 _fill_run_type(df_eplus, weight_tables["eplus"], cfg, "eplus",
                                beam_bunch, config_dir, ctime_override=signal_ctime_override)
             )
@@ -750,7 +785,8 @@ def run_pipeline(
              ctime_hists["dummy"], ctime_run_windows["dummy"],
              ctime_random_run_windows["dummy"],
              normyield_per_run["dummy"],
-             raw_helicity["dummy"]) = (
+             raw_helicity["dummy"],
+             raw_counts["dummy"]) = (
                 _fill_run_type(df_dummy, weight_tables["dummy"], cfg, "dummy",
                                beam_bunch, config_dir, ctime_override=signal_ctime_override)
             )
@@ -771,6 +807,7 @@ def run_pipeline(
         run_dfs=run_dfs,
         normyield_per_run=normyield_per_run,
         raw_helicity=raw_helicity,
+        raw_counts=raw_counts,
         cfg=cfg,
     )
 

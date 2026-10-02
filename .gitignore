@@ -20,3 +20,16 @@ htmlcov/
 .venv/
 venv/
 env/
+
+# Local generated analysis products and backups
+/output/
+/backup_output_*/
+.DS_Store
+
+# External data mount and independent simulation checkout
+/data/rootfiles_phaseII_online
+/simulation/simc_gfortran/
+
+# Archived experiments and local scratch script
+/archieve/
+/temp.py

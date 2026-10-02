@@ -1,0 +1,5 @@
+# thpq = 2.0
+_base: Cu_pip_e10p7_x0p25_q23p3_z0p5_base.yaml
+
+setting:
+  thpq: 2.0

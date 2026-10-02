@@ -191,7 +191,7 @@ histograms:
   # Azimuthal angle (full + helicity-split)
   - name:   phipq
     branch: P_kin_secondary_ph_xq
-    bins:   16
+    bins:   9
     xmin:   -3.14159265
     xmax:    3.14159265
     xlabel: '$\phi_{pq}$ (rad)'
@@ -201,7 +201,7 @@ histograms:
 
   - name:   phipq_hplus
     branch: P_kin_secondary_ph_xq
-    bins:   16
+    bins:   9
     xmin:   -3.14159265
     xmax:    3.14159265
     xlabel: '$\phi_{pq}$ (rad)  [$h^{+}$]'
@@ -209,7 +209,7 @@ histograms:
 
   - name:   phipq_hminus
     branch: P_kin_secondary_ph_xq
-    bins:   16
+    bins:   9
     xmin:   -3.14159265
     xmax:    3.14159265
     xlabel: '$\phi_{pq}$ (rad)  [$h^{-}$]'

@@ -1,0 +1,5 @@
+# thpq = 2.0
+_base: LH2_pip_e10p7_x0p25_q23p3_z0p9_base.yaml
+
+setting:
+  thpq: 2.0

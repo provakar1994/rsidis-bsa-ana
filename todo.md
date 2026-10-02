@@ -1,0 +1,12 @@
+- Systematics
+    - Need to estimate the fractional contribution of bg. asymmetries to signal. First step, run the following exclusive processes in SIMC (in each case set Egamma_max equal to the beam energy):
+        - Exclusive nucleon -> which_pion = 0 pi+ from p; which_pion = 1 pi- from n (needed for A>1 targets)
+        - Exclusive delta -> which pion = 2 & 3
+        - Diffractive rho -> debatable whether it should be treated as signal or bg. Dave thinks bg but Nobuo thinks signal. The argument for the later is that the diffractive rho is part of the SIDIS process (not a part of X). The argument for the former is that like higher order terms in the radiative correction, diffractive rho production cannot be isolated, hence should be included in X.
+    - Second step whould be to estimate the asymetry of the contributing bg. Use fig 6 of Phys. Lett. B 872 (2026) 140094 to estiamte sigma_LT'/sigma_0 based on acceptance averaged vertex x, Q2, and t.
+- Analysis related
+    -
+    - bin in P_T. For low P_T, asymetry becomes lower. So, including only high P_T should give better asymmetry.
+- General
+    - I see there are multiple places in the workflow where BCM2_Q has been hard coded even though there is flag in the config file, charge_column, to choose the charge column we want to use. Get rid of all the hard-coded instances.
+    - Make summary table more detailed

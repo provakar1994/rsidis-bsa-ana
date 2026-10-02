@@ -79,6 +79,10 @@ class AsymmetryResult:
         Number of bins included in the fit (W_+ + W_- > 0 AND σ > 0).
     beam_polarization : float
         |P_e| used for the polarization correction.
+    N_plus, N_minus : np.ndarray or None
+        Optional unweighted event counts per phi bin for positive and negative
+        effective helicity.  These are diagnostic counts only; A_phys and its
+        uncertainty are computed from the weighted/subtracted histograms.
     """
     histogram_name:    str
     phi_centers:       np.ndarray
@@ -91,6 +95,8 @@ class AsymmetryResult:
     chi2_ndf:          float
     n_bins_used:       int
     beam_polarization: float
+    N_plus:            np.ndarray | None = None
+    N_minus:           np.ndarray | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +209,8 @@ def compute_asymmetry(
     h_minus:           bh.Histogram,
     beam_polarization: float,
     histogram_name:    str,
+    N_plus:            np.ndarray | None = None,
+    N_minus:           np.ndarray | None = None,
 ) -> AsymmetryResult:
     """
     Compute the full beam SSA from a pair of helicity-split histograms.
@@ -216,6 +224,8 @@ def compute_asymmetry(
         |P_e| in (0, 1].
     histogram_name : str
         Label for the result (e.g. ``"phipq"``).
+    N_plus, N_minus : np.ndarray or None
+        Optional unweighted per-bin counts to carry through to CSV output.
 
     Returns
     -------
@@ -247,6 +257,8 @@ def compute_asymmetry(
         chi2_ndf          = chi2_ndf,
         n_bins_used       = n_used,
         beam_polarization = beam_polarization,
+        N_plus            = None if N_plus is None else np.asarray(N_plus).copy(),
+        N_minus           = None if N_minus is None else np.asarray(N_minus).copy(),
     )
 
 

@@ -1100,6 +1100,7 @@ def _page_asymmetry(
     config_dir: Path | None = None,
     pairs:      list[tuple[str, str, str]] | None = None,
     subtitle:   str | None = None,
+    count_histograms: dict[str, object] | None = None,
 ) -> list[AsymmetryResult]:
     """
     Compute and plot the beam SSA (A_LU^sinφ) for every helicity-split pair.
@@ -1118,6 +1119,9 @@ def _page_asymmetry(
         Pass an explicit list to restrict to a specific subset of pairs.
     subtitle : str or None
         Optional second line added to the page suptitle (e.g. kinematic bin label).
+    count_histograms : dict or None
+        Optional unweighted random-subtracted histograms used to attach
+        N+/N- counts to the returned AsymmetryResult objects.
 
     Returns the list of AsymmetryResult objects for use by the statistics page.
     Returns an empty list and skips the page when no pairs are found or
@@ -1163,7 +1167,15 @@ def _page_asymmetry(
         h_plus  = final[hplus_name]
         h_minus = final[hminus_name]
 
-        ar = compute_asymmetry(h_plus, h_minus, P_beam, base)
+        N_plus = N_minus = None
+        if count_histograms is not None:
+            h_plus_counts = count_histograms.get(hplus_name)
+            h_minus_counts = count_histograms.get(hminus_name)
+            if h_plus_counts is not None and h_minus_counts is not None:
+                N_plus = h_plus_counts.values()
+                N_minus = h_minus_counts.values()
+
+        ar = compute_asymmetry(h_plus, h_minus, P_beam, base, N_plus, N_minus)
         asym_results.append(ar)
 
         valid = np.isfinite(ar.A_phys) & np.isfinite(ar.A_phys_err)
@@ -1244,22 +1256,38 @@ def _page_asymmetry(
     return asym_results
 
 
+def _random_subtracted_count_histograms(
+    count_regs,
+) -> dict[str, object]:
+    """Return unweighted count histograms after scaled-random subtraction."""
+    return {
+        hname: subtract_randoms(count_regs.real[hname], count_regs.random[hname], scale=1.0)
+        for hname in count_regs.real
+    }
+
+
 # ---------------------------------------------------------------------------
 # Asymmetry CSV export
 # ---------------------------------------------------------------------------
 
 def _write_asymmetry_csv(path: Path, asym_results: list[AsymmetryResult]) -> None:
-    """Write phi bin centers, A_phys, and A_phys_err for all pairs to a CSV."""
+    """Write phi bin centers, A_phys, A_phys_err, and optional counts."""
     rows = []
     for ar in asym_results:
-        for phi, A, dA in zip(ar.phi_centers, ar.A_phys, ar.A_phys_err):
+        N_plus = ar.N_plus if ar.N_plus is not None else np.full_like(ar.phi_centers, np.nan, dtype=float)
+        N_minus = ar.N_minus if ar.N_minus is not None else np.full_like(ar.phi_centers, np.nan, dtype=float)
+        for phi, A, dA, n_plus, n_minus in zip(ar.phi_centers, ar.A_phys, ar.A_phys_err, N_plus, N_minus):
             rows.append({
                 "histogram": ar.histogram_name,
                 "phi_center": phi,
                 "A_phys":     A,
                 "A_phys_err": dA,
+                "N_plus":     n_plus,
+                "N_minus":    n_minus,
             })
-    df = pd.DataFrame(rows, columns=["histogram", "phi_center", "A_phys", "A_phys_err"])
+    df = pd.DataFrame(rows, columns=[
+        "histogram", "phi_center", "A_phys", "A_phys_err", "N_plus", "N_minus"
+    ])
     df.to_csv(path, index=False)
     logger.info("Asymmetry CSV → %s", path)
 
@@ -1361,9 +1389,12 @@ def _write_kinematic_summary(
             "asym_err": ar.amplitude_err if np.isfinite(ar.amplitude_err) else np.nan,
             "chi2_ndf": ar.chi2_ndf      if np.isfinite(ar.chi2_ndf)      else np.nan,
             "n_bins":   ar.n_bins_used,
+            "N_plus":   np.sum(ar.N_plus)  if ar.N_plus  is not None else np.nan,
+            "N_minus":  np.sum(ar.N_minus) if ar.N_minus is not None else np.nan,
         })
     cols = ["target", "particle", "ebeam", "x", "q2", "z", "thpq",
-            "histogram", "asym", "asym_err", "chi2_ndf", "n_bins"]
+            "histogram", "asym", "asym_err", "chi2_ndf", "n_bins",
+            "N_plus", "N_minus"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
     logger.info("Kinematic summary → %s", path)
 
@@ -1389,7 +1420,9 @@ def _write_binned_asymmetry_csv(
     rows = []
     for variable, bin_results in bin_groups:
         for ar, lo, hi, center in bin_results:
-            for phi, A, dA in zip(ar.phi_centers, ar.A_phys, ar.A_phys_err):
+            N_plus = ar.N_plus if ar.N_plus is not None else np.full_like(ar.phi_centers, np.nan, dtype=float)
+            N_minus = ar.N_minus if ar.N_minus is not None else np.full_like(ar.phi_centers, np.nan, dtype=float)
+            for phi, A, dA, n_plus, n_minus in zip(ar.phi_centers, ar.A_phys, ar.A_phys_err, N_plus, N_minus):
                 rows.append({
                     "variable":   variable,
                     "hmin":       lo,
@@ -1399,9 +1432,12 @@ def _write_binned_asymmetry_csv(
                     "phi_center": phi,
                     "A_phys":     A,
                     "A_phys_err": dA,
+                    "N_plus":     n_plus,
+                    "N_minus":    n_minus,
                 })
     cols = ["variable", "hmin", "hmax", "bin_center",
-            "histogram", "phi_center", "A_phys", "A_phys_err"]
+            "histogram", "phi_center", "A_phys", "A_phys_err",
+            "N_plus", "N_minus"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
     logger.info("Binned asymmetry CSV → %s", path)
 
@@ -1762,6 +1798,10 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
 
     logger.debug(subtraction_summary(sub_results))
 
+    signal_counts_after_random = _random_subtracted_count_histograms(
+        result.raw_counts["signal"]
+    )
+
     # ---- generate PDF ----
     logger.info("Writing diagnostic PDF: %s", output_pdf)
     with PdfPages(output_pdf) as pdf:
@@ -1803,6 +1843,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
             pdf, result, final,
             config_dir=yaml_path.parent,
             pairs=overall_pairs,
+            count_histograms=signal_counts_after_random,
         )
 
         # Per-bin SSA pages: one page per bin for each histogram with bin_in
@@ -1829,6 +1870,7 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
                     config_dir=yaml_path.parent,
                     pairs=[(_base, _hplus_name, _hminus_name)],
                     subtitle=_subtitle,
+                    count_histograms=signal_counts_after_random,
                 )
                 if _bin_ars:
                     _center = 0.5 * (_lo + _hi)
