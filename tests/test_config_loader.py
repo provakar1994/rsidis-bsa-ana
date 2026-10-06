@@ -1,7 +1,7 @@
 """
 Tests for rsidis_ssa.config_loader
 
-Positive tests use the real example YAML at config/example_C_z05_thpq2.yaml.
+Positive tests use the dedicated YAML fixture at tests/fixtures/example_C_z05_thpq2.yaml.
 Error-condition tests write minimal temporary YAML files via tmp_path.
 """
 
@@ -21,7 +21,7 @@ from rsidis_ssa.config_loader import (
 )
 from rsidis_ssa.runlist import Setting
 
-EXAMPLE_YAML = Path(__file__).parent.parent / "config" / "example_C_z05_thpq2.yaml"
+EXAMPLE_YAML = Path(__file__).parent / "fixtures" / "example_C_z05_thpq2.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +71,10 @@ MINIMAL_VALID = textwrap.dedent("""\
       paero_npe_min:  2.0
       phgc_npe_min:   1.0
       psshsum_max:    0.8
+      W_lo: 2.0
+      W_hi: 100.0
+      mmass_lo: 1.5
+      mmass_hi: 100.0
       ctime_real_center:          auto
       ctime_real_nsigma:          3.0
       ctime_real_window_fallback: 2.0
@@ -189,7 +193,7 @@ class TestRootfilesConfig:
         return load_config(EXAMPLE_YAML)
 
     def test_directory_parsed(self, cfg):
-        assert cfg.rootfiles.directory == "/Volumes/GMN_ROOTFILES_DISK2/rsidis/skimfiles/pass0p1"
+        assert cfg.rootfiles.directory == "/some/path"
 
     def test_pattern_parsed(self, cfg):
         assert "{run}" in cfg.rootfiles.pattern

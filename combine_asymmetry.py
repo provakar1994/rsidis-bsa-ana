@@ -621,6 +621,8 @@ def _write_combined_binned_summary(
             "hmax":       hmax,
             "bin_center": bin_center,
             "histogram":  hname,
+            "A_phys":     amp if np.isfinite(amp) else np.nan,
+            "A_phys_error": amp_err if np.isfinite(amp_err) else np.nan,
             "asym":       amp      if np.isfinite(amp)      else np.nan,
             "asym_err":   amp_err  if np.isfinite(amp_err)  else np.nan,
             "chi2_ndf":   chi2_ndf if np.isfinite(chi2_ndf) else np.nan,
@@ -631,7 +633,8 @@ def _write_combined_binned_summary(
 
     cols = ["target", "particle", "ebeam", "x", "q2", "z", "process", "thpq",
             "variable", "hmin", "hmax", "bin_center", "histogram",
-            "asym", "asym_err", "chi2_ndf", "n_bins", "N_plus", "N_minus"]
+            "asym", "asym_err", "chi2_ndf", "n_bins", "N_plus", "N_minus",
+            "A_phys", "A_phys_error"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
     logger.info("Kinematic summary → %s", path)
 

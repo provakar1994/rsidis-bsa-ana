@@ -1,0 +1,77 @@
+# Self-contained parsing fixture; no external data files are required.
+setting:
+  ebeam: 8.5831
+  x: 0.25
+  Q2: 3.3
+  z: 0.5
+  thpq: 2.0
+  run_type: PI-SIDIS
+target: C
+run_period: period_1
+do_eplus_subtraction: true
+do_dummy_subtraction: false
+rootfiles:
+  directory: /some/path
+  pattern: skimmed_coin_replay_production_{run}_-1.root
+  treename: T
+runlist:
+  csv: data/rsidis_bigtable_pass0p1.csv
+cuts:
+  hsdelta_lo: -8.0
+  hsdelta_hi: 8.0
+  hcer_npe_min: 1.0
+  hsshsum_min: 0.7
+  psdelta_lo: -10.0
+  psdelta_hi: 20.0
+  paero_npe_min: 2.0
+  phgc_npe_min: 1.0
+  psshsum_max: 0.8
+  W_lo: 2.0
+  W_hi: 100.0
+  mmass_lo: 1.5
+  mmass_hi: 100.0
+  ctime_real_center: auto
+  ctime_real_nsigma: 3.0
+  ctime_real_window_fallback: 2.0
+  ctime_random_n_skip: 1
+  ctime_random_n_peaks_lo: 3
+  ctime_random_n_peaks_hi: 3
+histograms:
+- name: hsdelta
+  branch: H_gtr_dp
+  bins: 16
+  xmin: -8.0
+  xmax: 8.0
+  xlabel: HMS delta
+- name: zhad
+  branch: __computed__zhad
+  bins: 16
+  xmin: 0
+  xmax: 1
+- name: Pt
+  branch: __computed__Pt
+  bins: 16
+  xmin: 0
+  xmax: 1
+- name: W
+  branch: H_kin_primary_W
+  bins: 16
+  xmin: 2
+  xmax: 4
+- name: phipq
+  branch: P_kin_secondary_ph_xq
+  bins: 16
+  xmin: -3.14159
+  xmax: 3.14159
+- name: phipq_hplus
+  branch: P_kin_secondary_ph_xq
+  bins: 16
+  xmin: -3.14159
+  xmax: 3.14159
+  helicity_cut: positive
+- name: phipq_hminus
+  branch: P_kin_secondary_ph_xq
+  bins: 16
+  xmin: -3.14159
+  xmax: 3.14159
+  helicity_cut: negative

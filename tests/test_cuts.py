@@ -14,6 +14,8 @@ from rsidis_ssa.config_loader import CutsConfig
 from rsidis_ssa.cuts import (
     M_PI,
     BRANCH_CTIME,
+    BRANCH_W,
+    BRANCH_MMASS,
     BRANCH_HCER_NPE,
     BRANCH_HELICITY,
     BRANCH_HSDELTA,
@@ -45,6 +47,7 @@ from rsidis_ssa.cuts import (
 def cuts_cfg() -> CutsConfig:
     """A standard CutsConfig for testing."""
     return CutsConfig(
+        W_lo=2.0, W_hi=100.0, mmass_lo=1.5, mmass_hi=100.0,
         hsdelta_lo=-8.0,
         hsdelta_hi=8.0,
         hcer_npe_min=1.0,
@@ -83,6 +86,8 @@ def _make_arrays(
     Override individual branches via keyword arguments.
     """
     return {
+        BRANCH_W:              np.full(n, 3.0),
+        BRANCH_MMASS:          np.full(n, 2.0),
         BRANCH_HSDELTA:          np.full(n, hsdelta),
         BRANCH_HCER_NPE:         np.full(n, hcer_npe),
         BRANCH_HETOTTRACKNORM:   np.full(n, hsshsum),
@@ -260,6 +265,7 @@ class TestRealCtimeMask:
 
     def test_fixed_center_uses_fallback_window(self):
         cfg = CutsConfig(
+            W_lo=2.0, W_hi=100.0, mmass_lo=1.5, mmass_hi=100.0,
             hsdelta_lo=-8.0,
             hsdelta_hi=8.0,
             hcer_npe_min=1.0,
@@ -282,6 +288,7 @@ class TestRealCtimeMask:
 
     def test_fixed_center_outside_window_fails(self):
         cfg = CutsConfig(
+            W_lo=2.0, W_hi=100.0, mmass_lo=1.5, mmass_hi=100.0,
             hsdelta_lo=-8.0,
             hsdelta_hi=8.0,
             hcer_npe_min=1.0,

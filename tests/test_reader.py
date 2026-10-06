@@ -42,6 +42,7 @@ from rsidis_ssa.reader import (
 @pytest.fixture
 def cuts_cfg() -> CutsConfig:
     return CutsConfig(
+        W_lo=2.0, W_hi=100.0, mmass_lo=1.5, mmass_hi=100.0,
         hsdelta_lo=-8.0,
         hsdelta_hi=8.0,
         hcer_npe_min=1.0,
@@ -54,8 +55,9 @@ def cuts_cfg() -> CutsConfig:
         ctime_real_center="auto",
         ctime_real_nsigma=3.0,
         ctime_real_window_fallback=2.0,
-        ctime_random_offset=20.0,
-        ctime_random_wscale=6.0,
+        ctime_random_n_skip=1,
+        ctime_random_n_peaks_lo=3,
+        ctime_random_n_peaks_hi=3,
     )
 
 

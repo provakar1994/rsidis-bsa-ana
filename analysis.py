@@ -1366,17 +1366,26 @@ def _write_kinematic_summary(
     path: Path,
     cfg,
     asym_results: list[AsymmetryResult],
+    bin_groups=None,
 ) -> None:
-    """Write one row per asymmetry result with kinematic metadata and fit values."""
+    """Write overall and kinematic-bin sine-fit amplitudes with metadata."""
     try:
         run_period = int(cfg.run_period.split("_")[-1])
     except (ValueError, IndexError):
         run_period = cfg.run_period
 
+    results = [(ar, "overall", np.nan, np.nan, np.nan) for ar in asym_results]
+    for variable, bin_results in bin_groups or []:
+        results.extend((ar, variable, lo, hi, center) for ar, lo, hi, center in bin_results)
     rows = []
-    for ar in asym_results:
+    for ar, variable, lo, hi, center in results:
         rows.append({
-            #"run_period":    run_period,
+            "variable": variable,
+            "hmin": lo,
+            "hmax": hi,
+            "bin_center": center,
+            "A_phys": ar.amplitude if np.isfinite(ar.amplitude) else np.nan,
+            "A_phys_error": ar.amplitude_err if np.isfinite(ar.amplitude_err) else np.nan,
             "target":   cfg.target,
             "particle": _PARTICLE_LABEL.get(cfg.setting.run_type, cfg.setting.run_type),
             "ebeam":    cfg.setting.ebeam,
@@ -1394,7 +1403,8 @@ def _write_kinematic_summary(
         })
     cols = ["target", "particle", "ebeam", "x", "q2", "z", "thpq",
             "histogram", "asym", "asym_err", "chi2_ndf", "n_bins",
-            "N_plus", "N_minus"]
+            "N_plus", "N_minus", "variable", "hmin", "hmax", "bin_center",
+            "A_phys", "A_phys_error"]
     pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
     logger.info("Kinematic summary → %s", path)
 
@@ -1893,8 +1903,9 @@ def make_diagnostic_pdf(yaml_path: Path, output_pdf: Path | None = None) -> None
     if asym_results:
         csv_path = output_pdf.with_name(output_pdf.stem + ".csv")
         _write_asymmetry_csv(csv_path, asym_results)
+    if asym_results or bin_groups:
         summary_path = output_pdf.with_name(output_pdf.stem + "_summary.csv")
-        _write_kinematic_summary(summary_path, cfg, asym_results)
+        _write_kinematic_summary(summary_path, cfg, asym_results, bin_groups)
 
     if bin_groups:
         binned_csv_path = output_pdf.with_name(output_pdf.stem + "_binned.csv")

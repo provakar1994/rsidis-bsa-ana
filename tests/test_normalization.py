@@ -290,31 +290,35 @@ class TestBuildWeightTableExclusions:
     def df(self):
         return load_runlist(CSV)
 
-    def test_nan_boil_corr_excluded_not_raised(self, df):
-        """Run 23861 has NaN boil_corr — must appear in excluded, not raise."""
-        lh2_run = df[df["run"] == 23861]
+    @pytest.fixture
+    def exclusion_runs(self):
+        return pd.DataFrame([
+            _make_row(run=11111, boil_corr=np.nan),
+            _make_row(run=22222, boil_corr=1.02),
+        ])
+
+    def test_nan_boil_corr_excluded_not_raised(self, exclusion_runs):
+        """Run 11111 has NaN boil_corr — must appear in excluded, not raise."""
+        lh2_run = exclusion_runs[exclusion_runs["run"] == 11111]
         result = build_weight_table(lh2_run, apply_boil_corr=True)
         assert result.n_valid == 0
         assert result.n_excluded == 1
-        assert result.excluded[0].run == 23861
+        assert result.excluded[0].run == 11111
 
-    def test_excluded_run_carries_column_name(self, df):
-        lh2_run = df[df["run"] == 23861]
+    def test_excluded_run_carries_column_name(self, exclusion_runs):
+        lh2_run = exclusion_runs[exclusion_runs["run"] == 11111]
         result = build_weight_table(lh2_run, apply_boil_corr=True)
         assert result.excluded[0].column == "boil_corr"
 
-    def test_excluded_run_carries_reason_string(self, df):
-        lh2_run = df[df["run"] == 23861]
+    def test_excluded_run_carries_reason_string(self, exclusion_runs):
+        lh2_run = exclusion_runs[exclusion_runs["run"] == 11111]
         result = build_weight_table(lh2_run, apply_boil_corr=True)
-        assert "23861" in result.excluded[0].reason
+        assert "11111" in result.excluded[0].reason
         assert "boil_corr" in result.excluded[0].reason
 
-    def test_mixed_batch_separates_valid_and_excluded(self, df):
-        """Batch of LH2 runs: 23861 (no boil_corr) + others (valid boil_corr)."""
-        setting = Setting(ebeam=8.5831, x=0.25, Q2=3.3, z=0.5, thpq=5.2,
-                          run_type="PI-SIDIS")
-        lh2_runs = get_signal_runs(select_runs(df, setting, "LH2"))
-        assert len(lh2_runs) > 1, "Need more than one LH2 run for this test"
+    def test_mixed_batch_separates_valid_and_excluded(self, exclusion_runs):
+        """Batch of LH2 runs: 11111 (no boil_corr) + others (valid boil_corr)."""
+        lh2_runs = exclusion_runs
 
         result = build_weight_table(lh2_runs, apply_boil_corr=True)
         excluded_nos = {ex.run for ex in result.excluded}
@@ -324,8 +328,9 @@ class TestBuildWeightTableExclusions:
         assert excluded_nos.isdisjoint(valid_nos)
         assert excluded_nos | valid_nos == set(lh2_runs["run"])
 
-        # Run 23861 specifically must be in excluded
-        assert 23861 in excluded_nos
+        # Run 11111 specifically must be in excluded
+        assert excluded_nos == {11111}
+        assert valid_nos == {22222}
 
         # Valid runs must all have finite positive weights
         assert all(math.isfinite(rw.weight) and rw.weight > 0
@@ -341,11 +346,11 @@ class TestBuildWeightTableExclusions:
         assert 22222 in result.weights
         assert result.excluded[0].column == "BCM2_Q"
 
-    def test_summary_string_lists_excluded_runs(self, df):
-        lh2_run = df[df["run"] == 23861]
+    def test_summary_string_lists_excluded_runs(self, exclusion_runs):
+        lh2_run = exclusion_runs[exclusion_runs["run"] == 11111]
         result = build_weight_table(lh2_run, apply_boil_corr=True)
         summary = result.summary()
-        assert "23861" in summary
+        assert "11111" in summary
         assert "excluded" in summary.lower()
 
     def test_cryo_valid_boil_succeeds_with_no_exclusions(self, df):
@@ -409,13 +414,14 @@ class TestBuildWeightTableLog:
                     f"Run {run_no} not found in log file"
                 )
 
-    def test_log_contains_excluded_run_number_and_column(self, df):
-        lh2_run = df[df["run"] == 23861]
+    def test_log_contains_excluded_run_number_and_column(self):
+        lh2_run = pd.DataFrame([_make_row(run=11111, boil_corr=np.nan)])
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "excl.log"
-            build_weight_table(lh2_run, apply_boil_corr=True, log_path=log_path)
+            result = build_weight_table(lh2_run, apply_boil_corr=True, log_path=log_path)
+            assert result.n_excluded == 1
             content = log_path.read_text()
-            assert "23861" in content
+            assert "11111" in content
             assert "boil_corr" in content
 
     def test_log_contains_timestamp(self, df):

@@ -206,6 +206,15 @@ python combine_asymmetry.py \
 Summary CSVs include a `process` column (`sidis` for nominal files,
 `exclusive` for the exclusive stream).
 
+Single-setting `<stem>_summary.csv` files include overall rows
+(`variable=overall`) and one row per configured kinematic bin (`variable=pt`
+for pT). `hmin`, `hmax`, and `bin_center` identify the bin in GeV/c for pT.
+Both these files and combined `*_binned_summary.csv` files expose `A_phys`
+and `A_phys_error`: the fitted sine amplitude and its statistical uncertainty.
+They are aliases of `asym` and `asym_err`, retained for plotting compatibility.
+These fit amplitudes differ from the individual φ-bin `A_phys` measurements
+in `<stem>_binned.csv`.
+
 Asymmetry CSVs also include diagnostic `N_plus` and `N_minus` counts for
 effective helicity. These are signal-sample event counts after scaled random
 subtraction, before charge normalization, e⁺ subtraction, or dummy subtraction.
