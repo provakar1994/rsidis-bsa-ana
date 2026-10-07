@@ -28,12 +28,12 @@ runs_include: null
 runs_exclude: []
 
 rootfiles:
-  directory:  ../data/rootfiles_phaseII_online
+  directory:  ../data/rootfiles_pass1
   pattern:    skimmed_coin_replay_production_{run}_-1.root
   treename:   T
 
 runlist:
-  csv: ../data/rsidis_bigtable_phaseII.csv
+  csv: ../data/rsidis_bigtable_pass1.csv
 
 normalization:
   charge_column:  BCM2_Q

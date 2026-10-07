@@ -959,3 +959,12 @@ subtraction scale applied to the dummy histogram is `1 / dummy_scale[target]`.
 | `BRANCH_PPi` | `P_gtr_p` | SHMS pion momentum [GeV/c] |
 | `BRANCH_NU` | `H_kin_primary_nu` | Virtual-photon energy ν [GeV] |
 | `BRANCH_THETA_PQ` | `P_kin_secondary_th_xq` | θ_pq [rad] |
+
+
+## Example executions
+- python run_pipeline.py --settings data/settings/rpr1_pim_settings.csv data/settings/rpr1_pip_settings.csv --z 0.36 0.5 0.67 --steps analyze combine --binned --force
+- python plot_target_dependence.py --targets LD2 C Cu LH2 --epsilon 0.59 --reference LH2 --z 0.36 0.5 0.67 --ylim -0.02 0.12  --ylim-diff -0.06 0.06 --ylim-flu -0.05 0.20  --ylim-flu-diff -0.06 0.11 --output output/plots/x0p25_target_dependence_pass1.pdf
+- python run_pipeline.py --settings data/settings/rpr1_pim_settings.csv data/settings/rpr1_pip_settings.csv --z 0.9 --steps analyze combine --process exclusive --binned --force
+- python plot_target_dependence.py --targets LD2 C Cu LH2 --epsilon 0.59 --reference LH2 --z-avg 0.9 --ylim-zavg-diff -0.19 0.19 --ylim -0.072 0.2  --ylim-diff -0.09 0.12 --ylim-flu -0.15 0.37  --ylim-flu-diff -0.12 0.18 --process exclusive --output output/plots/x0p25_target_dependence_exclusive_pass1.pdf
+- python run_pipeline.py --settings data/settings/rpr1_pip_settings.csv --z 0.52 --steps analyze combine --binned --force
+- python plot_target_dependence.py --targets LD2 C Cu LH2 --epsilon 0.77 --reference LH2 --z 0.52 --ylim -0.02 0.12  --ylim-diff -0.06 0.06 --ylim-flu -0.05 0.20  --ylim-flu-diff -0.06 0.11 --output output/plots/x0p44_target_dependence_pass1.pdf

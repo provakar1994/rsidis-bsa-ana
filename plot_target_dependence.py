@@ -408,7 +408,6 @@ def _emit_pages(
 def _fig_zavg_diff(
     df_diff:  pd.DataFrame,
     targets:  list[str],
-    z_vals:   list[float],
     suptitle: str,
     qty:      str = _QTY_A,
     diff_ref: str | None = None,
@@ -429,12 +428,9 @@ def _fig_zavg_diff(
     fig.subplots_adjust(top=0.93, hspace=0)
     fig.suptitle(suptitle, fontsize=10)
 
-    z_str = ", ".join(f"{z:.2f}" for z in sorted(z_vals))
-
     for r, target in enumerate(targets):
         ax        = axes[r, 0]
         is_bottom = (r == n_rows - 1)
-        is_top    = (r == 0)
 
         for particle, style in _PARTICLE_STYLES.items():
             grp = (df_diff[(df_diff["target"]   == target)
@@ -459,16 +455,8 @@ def _fig_zavg_diff(
         ax.set_ylabel(_ylabel(qty, target, diff_ref), fontsize=8)
         _ax_style(ax, xlabel=is_bottom, ylabel=True)
 
-        if is_top:
-            ax.text(0.05, 0.95,
-                    f"$\\langle z \\rangle$ = {np.mean(z_vals):.2f}",
-                    transform=ax.transAxes, va="top", ha="left", fontsize=9)        
-
         if is_bottom:
             ax.set_xlabel(r"$\langle P_T \rangle$ (GeV/$c$)", fontsize=10)
-            ax.text(0.03, 0.05, f"z-avg: {z_str}",
-                    transform=ax.transAxes, va="bottom", ha="left",
-                    fontsize=7, color="0.45")
 
     handles = [
         Line2D([], [], marker=st["marker"], color=st["color"],
@@ -505,7 +493,7 @@ def _emit_zavg_diff_pages(
         suffix=rf" $-$ {reference}  [z-avg: {{{z_str}}}]",
         epsilon=epsilon,
     )
-    fig = _fig_zavg_diff(df_diff, diff_targets, z_vals, title,
+    fig = _fig_zavg_diff(df_diff, diff_targets, title,
                          qty=qty, diff_ref=reference, ylim=ylim_diff)
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
@@ -562,8 +550,9 @@ def main() -> None:
     )
     # ── z-averaged difference ─────────────────────────────────────────────────
     parser.add_argument(
-        "--z-avg", nargs="+", type=float, default=None, metavar="Z",
-        help="IVW-average asymmetry over these z values, then plot diff vs p_T",
+        "--z-avg", "--z", nargs="+", type=float, default=None, metavar="Z",
+        help="Add a z-averaged difference page vs p_T (inverse-variance weights); "
+             "does not filter the regular pages",
     )
     parser.add_argument(
         "--ylim-zavg-diff", nargs=2, type=float, default=None,
@@ -636,25 +625,20 @@ def main() -> None:
                 epsilon   = args.epsilon,
             )
 
-        # ── z-averaged difference pages ───────────────────────────────────────
+        # One z-averaged difference page per enabled observable.
         if args.z_avg and has_diff:
-            try:
-                n_pages += _emit_zavg_diff_pages(
-                    pdf, df_all, diff_targets, args.z_avg,
-                    reference = args.reference,
-                    qty       = _QTY_A,
-                    ylim_diff = ylim_zavg_diff,
-                )
-                if df_flu is not None:
+            observables = [(df_all, _QTY_A, ylim_zavg_diff, None)]
+            if df_flu is not None:
+                observables.append((df_flu, _QTY_F, ylim_flu_zavg_diff, args.epsilon))
+            for data, qty, limits, epsilon in observables:
+                try:
                     n_pages += _emit_zavg_diff_pages(
-                        pdf, df_flu, diff_targets, args.z_avg,
-                        reference = args.reference,
-                        qty       = _QTY_F,
-                        ylim_diff = ylim_flu_zavg_diff,
-                        epsilon   = args.epsilon,
+                        pdf, data, diff_targets, args.z_avg,
+                        reference=args.reference, qty=qty,
+                        ylim_diff=limits, epsilon=epsilon,
                     )
-            except ValueError as exc:
-                print(f"Warning: {exc}")
+                except ValueError as exc:
+                    print(f"Warning: {exc}")
 
     print(f"Saved: {out}  ({n_pages} pages)")
 
