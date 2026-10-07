@@ -253,20 +253,20 @@ Produces a two-page PDF:
 - **Page 1** — A_LU^sinφ vs p_T (one curve per z) and vs z (one curve per p_T bin)
 - **Page 2** — A_LU^sinφ vs z, one panel per p_T bin, shared y-axis, no gap between panels
 
-### `plot_target_dependence.py`
+### `plot_nuclear_dependence.py`
 
 Compares A_LU^sinφ (and optionally F_LU^sinφ/F_UU) across targets for all z values.
 π⁺ and π⁻ are overlaid on the same panels with distinct colours and markers.
 
 ```bash
 # Default: A_LU only, all targets
-python plot_target_dependence.py
+python plot_nuclear_dependence.py
 
 # With F_LU/F_UU pages (requires ε = virtual-photon depolarisation)
-python plot_target_dependence.py --epsilon 0.7
+python plot_nuclear_dependence.py --epsilon 0.7
 
 # Custom y ranges and target subset
-python plot_target_dependence.py --epsilon 0.7 \
+python plot_nuclear_dependence.py --epsilon 0.7 \
     --ylim -0.02 0.12  --ylim-diff -0.06 0.06 \
     --ylim-flu -0.05 0.20  --ylim-flu-diff -0.10 0.10 \
     --targets C Cu LD2 LH2 --reference LH2
@@ -290,7 +290,7 @@ ssa/
 ├── combine_asymmetry.py         # Combine asymmetries across thpq values (IVW)
 ├── run_pipeline.py              # Automated pipeline: generate configs → analyze → combine
 ├── plot_z_dependence.py         # z-dependence plots for one target/hadron
-├── plot_target_dependence.py    # Target-dependence comparison across all targets
+├── plot_nuclear_dependence.py    # Target-dependence comparison across all targets
 ├── config/
 │   ├── <target>_<pip|pim>_<kin>_base.yaml     # Base config shared across thpq values
 │   ├── <target>_<pip|pim>_<kin>_thpq<v>.yaml  # Per-thpq override (4 lines; _base: ...)
@@ -963,20 +963,20 @@ subtraction scale applied to the dummy histogram is `1 / dummy_scale[target]`.
 
 ## Example executions
 - python run_pipeline.py --settings data/settings/rpr1_pim_settings.csv data/settings/rpr1_pip_settings.csv --z 0.36 0.5 0.67 --steps analyze combine --binned --force
-- python plot_target_dependence.py --targets LD2 C Cu LH2 --epsilon 0.59 --reference LH2 --z 0.36 0.5 0.67 --ylim -0.02 0.12  --ylim-diff -0.06 0.06 --ylim-flu -0.05 0.20  --ylim-flu-diff -0.06 0.11 --output output/plots/x0p25_target_dependence_pass1.pdf
+- python plot_nuclear_dependence.py --targets LD2 C Cu LH2 --epsilon 0.59 --reference LH2 --z 0.36 0.5 0.67 --ylim -0.02 0.12  --ylim-diff -0.06 0.06 --ylim-flu -0.05 0.20  --ylim-flu-diff -0.06 0.11 --output output/plots/x0p25_target_dependence_pass1.pdf
 - python run_pipeline.py --settings data/settings/rpr1_pim_settings.csv data/settings/rpr1_pip_settings.csv --z 0.9 --steps analyze combine --process exclusive --binned --force
-- python plot_target_dependence.py --targets LD2 C Cu LH2 --epsilon 0.59 --reference LH2 --z-avg 0.9 --ylim-zavg-diff -0.19 0.19 --ylim -0.072 0.2  --ylim-diff -0.09 0.12 --ylim-flu -0.15 0.37  --ylim-flu-diff -0.12 0.18 --process exclusive --output output/plots/x0p25_target_dependence_exclusive_pass1.pdf
+- python plot_nuclear_dependence.py --targets LD2 C Cu LH2 --epsilon 0.59 --reference LH2 --z-avg 0.9 --ylim-zavg-diff -0.19 0.19 --ylim -0.072 0.2  --ylim-diff -0.09 0.12 --ylim-flu -0.15 0.37  --ylim-flu-diff -0.12 0.18 --process exclusive --output output/plots/x0p25_target_dependence_exclusive_pass1.pdf
 - python run_pipeline.py --settings data/settings/rpr1_pip_settings.csv --z 0.52 --steps analyze combine --binned --force
-- python plot_target_dependence.py --targets LD2 C Cu LH2 --epsilon 0.77 --reference LH2 --z 0.52 --ylim -0.02 0.12  --ylim-diff -0.06 0.06 --ylim-flu -0.05 0.20  --ylim-flu-diff -0.06 0.11 --output output/plots/x0p44_target_dependence_pass1.pdf
+- python plot_nuclear_dependence.py --targets LD2 C Cu LH2 --epsilon 0.77 --reference LH2 --z 0.52 --ylim -0.02 0.12  --ylim-diff -0.06 0.06 --ylim-flu -0.05 0.20  --ylim-flu-diff -0.06 0.11 --output output/plots/x0p44_target_dependence_pass1.pdf
 
 ### Target-dependence input selection
 
-`plot_target_dependence.py` reads the already combined
+`plot_nuclear_dependence.py` reads the already combined
 `output/combined/*_binned_summary.csv` files. Use `--x` to select one nominal
 Bjorken x, then `--z` (alias `--z-avg`) to select the z settings for every page:
 
 ```bash
-python plot_target_dependence.py --x 0.25 --z 0.5 0.67 --epsilon 0.59
+python plot_nuclear_dependence.py --x 0.25 --z 0.5 0.67 --epsilon 0.59
 ```
 
 The selected z values also define the additional z-averaged difference page.

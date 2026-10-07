@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from plot_target_dependence import _select_kinematics
+from plot_nuclear_dependence import _select_kinematics
 
 
 def test_select_x_then_z_without_mixing_adjacent_settings():
