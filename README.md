@@ -968,3 +968,19 @@ subtraction scale applied to the dummy histogram is `1 / dummy_scale[target]`.
 - python plot_target_dependence.py --targets LD2 C Cu LH2 --epsilon 0.59 --reference LH2 --z-avg 0.9 --ylim-zavg-diff -0.19 0.19 --ylim -0.072 0.2  --ylim-diff -0.09 0.12 --ylim-flu -0.15 0.37  --ylim-flu-diff -0.12 0.18 --process exclusive --output output/plots/x0p25_target_dependence_exclusive_pass1.pdf
 - python run_pipeline.py --settings data/settings/rpr1_pip_settings.csv --z 0.52 --steps analyze combine --binned --force
 - python plot_target_dependence.py --targets LD2 C Cu LH2 --epsilon 0.77 --reference LH2 --z 0.52 --ylim -0.02 0.12  --ylim-diff -0.06 0.06 --ylim-flu -0.05 0.20  --ylim-flu-diff -0.06 0.11 --output output/plots/x0p44_target_dependence_pass1.pdf
+
+### Target-dependence input selection
+
+`plot_target_dependence.py` reads the already combined
+`output/combined/*_binned_summary.csv` files. Use `--x` to select one nominal
+Bjorken x, then `--z` (alias `--z-avg`) to select the z settings for every page:
+
+```bash
+python plot_target_dependence.py --x 0.25 --z 0.5 0.67 --epsilon 0.59
+```
+
+The selected z values also define the additional z-averaged difference page.
+Without `--z`, all z settings at the selected x are plotted, with no z-average
+page. Omitting `--x` is allowed only when the inputs contain a single x value.
+Unknown x or z selections produce an error. Nominal settings match within
+1e-6, so z=0.50 and z=0.52 remain distinct. No thpq selection is applied.

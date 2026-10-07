@@ -16,6 +16,11 @@ Page layout
   3 — F_LU/F_UU, all targets vs z              (only with --epsilon)
   4 — F_LU/F_UU difference                     (only with --epsilon)
 
+Select one x with --x. --z (alias --z-avg) filters all pages to the
+specified z settings and adds a z-averaged difference page. If --x is omitted,
+inputs must contain exactly one x. No thpq filtering is applied: inputs are
+already combined summaries.
+
 Must be run from the project root.
 
 Usage
@@ -138,6 +143,30 @@ def _load_all(variable: str, process: str) -> pd.DataFrame:
             f"available processes: {available}"
         )
     return pd.concat(frames, ignore_index=True)
+
+
+def _select_kinematics(df: pd.DataFrame, x: float | None,
+                       z_vals: list[float] | None) -> pd.DataFrame:
+    """Select one nominal x and optional z settings before any combination."""
+    available_x = sorted(df["x"].dropna().unique())
+    if x is None:
+        if len(available_x) != 1:
+            raise ValueError(f"Specify --x; available x values: {available_x}")
+        x = available_x[0]
+    selected = df[np.isclose(df["x"], x, atol=1e-6, rtol=0)].copy()
+    if selected.empty:
+        raise ValueError(f"No data for x={x}; available x values: {available_x}")
+    if z_vals:
+        available_z = sorted(selected["z"].dropna().unique())
+        missing = [z for z in z_vals
+                   if not np.isclose(selected["z"], z, atol=1e-6, rtol=0).any()]
+        if missing:
+            raise ValueError(f"No data for z={missing} at x={x}; available z values: {available_z}")
+        mask = np.zeros(len(selected), dtype=bool)
+        for z in z_vals:
+            mask |= np.isclose(selected["z"], z, atol=1e-6, rtol=0)
+        selected = selected.loc[mask].copy()
+    return selected.reset_index(drop=True)
 
 
 def _ordered_targets(df: pd.DataFrame, requested: list[str] | None) -> list[str]:
@@ -526,6 +555,10 @@ def main() -> None:
         "--process", default=DEFAULT_PROCESS, metavar="NAME",
         help="Analysis process to plot (default: sidis; e.g. exclusive)",
     )
+    parser.add_argument(
+        "--x", type=float, default=None, metavar="X",
+        help="Select one nominal x (required when inputs contain multiple x values)",
+    )
     # ── A_LU ylim ────────────────────────────────────────────────────────────
     parser.add_argument(
         "--ylim", nargs=2, type=float, default=None, metavar=("YMIN", "YMAX"),
@@ -551,8 +584,8 @@ def main() -> None:
     # ── z-averaged difference ─────────────────────────────────────────────────
     parser.add_argument(
         "--z-avg", "--z", nargs="+", type=float, default=None, metavar="Z",
-        help="Add a z-averaged difference page vs p_T (inverse-variance weights); "
-             "does not filter the regular pages",
+        help="Select z settings for all pages and add their inverse-variance "
+             "averaged difference page vs p_T",
     )
     parser.add_argument(
         "--ylim-zavg-diff", nargs=2, type=float, default=None,
@@ -586,7 +619,10 @@ def main() -> None:
     ylim_zavg_diff     = tuple(args.ylim_zavg_diff)     if args.ylim_zavg_diff     else ylim_diff
     ylim_flu_zavg_diff = tuple(args.ylim_flu_zavg_diff) if args.ylim_flu_zavg_diff else ylim_flu_diff
 
-    df_all  = _load_all(args.variable, process)
+    try:
+        df_all = _select_kinematics(_load_all(args.variable, process), args.x, args.z_avg)
+    except ValueError as exc:
+        parser.error(str(exc))
     targets = _ordered_targets(df_all, args.targets)
     bins    = _pt_bins(df_all)
 
