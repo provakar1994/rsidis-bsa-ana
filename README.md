@@ -256,7 +256,46 @@ Produces a two-page PDF:
 ### `plot_nuclear_dependence.py`
 
 Compares A_LU^sinφ (and optionally F_LU^sinφ/F_UU) across targets for all z values.
-π⁺ and π⁻ are overlaid on the same panels with distinct colours and markers.
+By default π⁺ (blue) and π⁻ (red) appear with small horizontal offsets and a black diamond
+showing their inverse-variance weighted average. Individual charge points and
+error bars use 45% opacity. Z-averaged page titles list the supplied real z
+coordinates (falling back to nominal z for unmapped settings). This applies to comparison,
+difference, structure-function, and z-averaged difference pages. Use
+`--particle pi+` or `--particle pi-` to plot a single charge without offsets or an
+average; `--particle both` is the default.
+
+For paired values, the average is `sum(A / sigma²) / sum(1 / sigma²)` with error
+`1 / sqrt(sum(1 / sigma²))`, assuming independent particle uncertainties.
+Difference pages average the two particle differences with their propagated errors.
+An average is drawn only when both charges have finite values and positive finite
+errors at the same nominal z and p_T bin.
+
+`--z` continues to select **nominal** settings. Supply acceptance-averaged vertex
+z coordinates with `--real-z NOMINAL=REAL ...`, for example:
+
+```bash
+python plot_nuclear_dependence.py --x 0.25 --z 0.5 0.67 \
+    --real-z 0.5=0.513 0.67=0.681 --particle both
+```
+
+For target-, charge-, or bin-dependent coordinates, use `--real-z-csv real_z.csv`.
+Required columns are `z` (nominal) and `real_z`; optional matching columns are
+`x`, `target`, `particle`, and `histogram`. Every provided key must be filled;
+rows must not overlap for selected data. For example:
+
+```csv
+x,target,particle,z,real_z
+0.25,C,pi+,0.5,0.513
+0.25,C,pi-,0.5,0.519
+0.25,LH2,pi+,0.5,0.510
+0.25,LH2,pi-,0.5,0.516
+```
+
+Unmapped settings use nominal z. CSV matches override `--real-z` mappings.
+Charge averages lie at the midpoint of the two supplied coordinates; offsets
+are visual only and do not affect any average. Difference points use the
+non-reference target's coordinates. The z-averaged pages retain their p_T axis;
+their averaging and reference matching always use nominal settings.
 
 ```bash
 # Default: A_LU only, all targets
@@ -277,6 +316,16 @@ Page layout:
 - **Page 2** — A_LU^sinφ difference (A_target − A_ref)
 - **Page 3** — F_LU^sinφ/F_UU vs z (`--epsilon` only)
 - **Page 4** — F_LU^sinφ/F_UU difference (`--epsilon` only)
+- **Page 5** — A_LU^sinφ, individual targets vs p_T, averaged over selected z
+- **Page 6** — A_LU^sinφ difference vs p_T, averaged over selected z
+- **Page 7** — F_LU^sinφ/F_UU, individual targets vs p_T, averaged over selected z
+- **Page 8** — F_LU^sinφ/F_UU difference vs p_T, averaged over selected z
+
+Pages 5–8 require `--z` (alias `--z-avg`); pages 7–8 also require
+`--epsilon`. Page numbers assume all eight pages are enabled. Comparison pages
+include the reference target and are produced even when no reference difference
+is available. Set their y ranges with `--ylim-zavg` and `--ylim-flu-zavg`,
+which default to `--ylim` and `--ylim-flu`, respectively.
 
 where `F_LU^sinφ / F_UU = A_LU^sinφ / sqrt(2 ε (1−ε))`.
 
