@@ -329,6 +329,60 @@ which default to `--ylim` and `--ylim-flu`, respectively.
 
 where `F_LU^sinφ / F_UU = A_LU^sinφ / sqrt(2 ε (1−ε))`.
 
+
+Systematic bands are optional. Enable them with `--sys --sys-csv FILE`.
+The CSV specifies percentages **directly for final plotted values**, including
+explicit weighted-average, target-difference, and z-averaged entries:
+
+```csv
+process,x,target,reference,particle,view,z,histogram,beam_pol_pct,excl_pct,delta_pct,rho_pct
+sidis,0.25,C,,both,z,0.5,phipq_ptbin0,3.0,2.0,1.5,1.0
+sidis,0.25,C,LH2,both,z,0.5,phipq_ptbin0,0.0,2.5,1.8,1.2
+sidis,0.25,C,LH2,both,zavg,,phipq_ptbin0,0.0,2.0,1.5,1.0
+```
+
+- `reference` is empty for an individual target, or names the subtracted target.
+- `particle` is `pi+`, `pi-`, or `both`. When both charges are plotted, the band
+  represents the black weighted average and uses only `both` entries.
+- `view=z` matches nominal `z`; `view=zavg` requires empty `z` and describes the
+  final value averaged over the z settings selected for that run. Use a separate
+  CSV when different z selections require different z-averaged percentages.
+- `histogram` must exactly match the summary CSV's p_T-bin identifier.
+- All four source columns are required. Percentages must be finite and
+  nonnegative; use `0` for an absent source. Additional `*_pct` columns are allowed.
+
+For the final value `V`, the systematic uncertainty is
+`abs(V) * sqrt(sum(source_pct**2)) / 100`. Thus differences and averages use their
+own percentages, with no propagation or fallback from constituent points.
+Zero-valued points have zero percentage-based systematic uncertainty. The same
+percentages apply to A_LU and F_LU/F_UU; their absolute bands follow the observable's
+scaling. Statistical error bars and weights are unchanged.
+
+A gray band shows +1σ above a flat baseline, 4% of the y-axis span above the
+bottom by default. Its upper edge uses shape-preserving PCHIP interpolation
+between real z coordinates or p_T centers, without extrapolation. A single-point
+panel uses a short constant strip. `--sys-y Y` optionally sets an absolute baseline
+for all pages; it must fit each page's y range. Bands retain the uncertainty's
+actual height in observable units.
+
+The example `config/systematics_example.csv` contains **illustrative percentages,
+not uncertainty estimates**, for SIDIS, x=0.25, targets LH2/LD2/C/Cu, nominal z=0.5/0.67,
+and all three particle selections. Its z-averaged rows are for that exact pair
+of nominal z settings. Test all eight pages with:
+
+```bash
+python plot_nuclear_dependence.py --x 0.25 --z 0.5 0.67 \
+    --targets LD2 C Cu LH2 --epsilon 0.59 \
+    --real-z 0.5=0.513 0.67=0.681 \
+    --sys --sys-csv config/systematics_example.csv \
+    --output output/plots/nuclear_dependence_systematics_example.pdf
+```
+
+When enabled, a missing CSV, invalid or duplicate identifiers, or missing entries
+for any plotted band point stops the command. Missing-entry checks run before
+opening the output PDF. Without `--sys`, bands are disabled; `--sys-csv` and
+`--sys-y` require `--sys`.
+
 ---
 
 ## Package Layout

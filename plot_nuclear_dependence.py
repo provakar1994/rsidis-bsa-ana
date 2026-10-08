@@ -29,6 +29,9 @@ specified z settings and adds z-averaged comparison and difference pages. If --x
 inputs must contain exactly one x. No thpq filtering is applied: inputs are
 already combined summaries.
 
+Use --sys --sys-csv FILE for +1σ bands from percentages of final plotted
+values, including explicit both-charge averages and target differences.
+
 Must be run from the project root.
 
 Usage
@@ -53,6 +56,7 @@ import matplotlib.ticker as mticker
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
+from scipy.interpolate import PchipInterpolator
 
 COMBINED_DIR  = Path("output/combined")
 PLOTS_DIR     = Path("output/plots")
@@ -297,13 +301,135 @@ def _plot_particles(ax: plt.Axes, df: pd.DataFrame, axis: str) -> None:
                         elinewidth=1.3, lw=0, alpha=1.0, zorder=4)
 
 
+_SYS_KEYS = ["process", "x", "target", "reference", "particle", "view", "z", "histogram"]
+_SYS_SOURCES = ["beam_pol_pct", "excl_pct", "delta_pct", "rho_pct"]
+
+
+def _load_systematics(path: str) -> pd.DataFrame:
+    """Validate percentages for explicitly specified final plotted values."""
+    table = pd.read_csv(path)
+    missing = set(_SYS_KEYS + _SYS_SOURCES) - set(table.columns)
+    if missing:
+        raise ValueError(f"Systematics CSV missing columns: {sorted(missing)}")
+    unknown = [c for c in table if c not in _SYS_KEYS and not c.endswith("_pct")]
+    if unknown:
+        raise ValueError(f"Systematics CSV unknown columns: {unknown}")
+    if table.empty:
+        raise ValueError("Systematics CSV is empty")
+    table["reference"] = table["reference"].fillna("")
+    for key in ("process", "target", "reference", "particle", "view", "histogram"):
+        if table[key].isna().any():
+            raise ValueError(f"Systematics CSV has missing {key}")
+        table[key] = table[key].astype(str).str.strip()
+        if key != "reference" and table[key].eq("").any():
+            raise ValueError(f"Systematics CSV has empty {key}")
+    if not table["particle"].isin(["pi+", "pi-", "both"]).all():
+        raise ValueError("Systematics CSV particle must be pi+, pi-, or both")
+    if not table["view"].isin(["z", "zavg"]).all():
+        raise ValueError("Systematics CSV view must be z or zavg")
+    for key in ("x", "z"):
+        table[key] = pd.to_numeric(table[key], errors="raise")
+    if not np.isfinite(table["x"]).all():
+        raise ValueError("Systematics CSV x must be finite")
+    z_rows = table["view"].eq("z")
+    if not np.isfinite(table.loc[z_rows, "z"]).all():
+        raise ValueError("Systematics CSV view=z requires finite nominal z")
+    if table.loc[~z_rows, "z"].notna().any():
+        raise ValueError("Systematics CSV view=zavg requires empty z")
+    percentages = table.filter(regex=r"_pct$").apply(pd.to_numeric, errors="raise")
+    if not np.isfinite(percentages.to_numpy()).all() or (percentages < 0).any().any():
+        raise ValueError("Systematics percentages must be finite and nonnegative")
+    table["sys_fraction"] = np.hypot.reduce(percentages.to_numpy(dtype=float) / 100, axis=1)
+    # Match nominal settings to six decimals, consistent with selection precision.
+    table[["x", "z"]] = table[["x", "z"]].round(6)
+    if table.duplicated(_SYS_KEYS).any():
+        raise ValueError("Systematics CSV contains duplicate point identifiers")
+    return table
+
+
+def _systematic_points(df: pd.DataFrame, targets: list[str], axis: str,
+                       table: pd.DataFrame, reference: str | None = None) -> pd.DataFrame:
+    """Use 'both' percentages on the final weighted average; no propagation."""
+    df = df[df["target"].isin(targets)].copy()
+    if df.empty:
+        return df.assign(sigma_sys=pd.Series(dtype=float))
+    if {"pi+", "pi-"}.issubset(df["particle"].unique()):
+        points = _particle_average(df, axis)
+        points["particle"] = "both"
+        points["x"] = df["x"].iloc[0]
+        points["process"] = df["process"].iloc[0] if "process" in df else DEFAULT_PROCESS
+    else:
+        points = df.copy()
+    points["process"] = (points["process"] if "process" in points else DEFAULT_PROCESS)
+    points["reference"] = reference or ""
+    points["view"] = "z" if axis == "z" else "zavg"
+    if axis != "z":
+        points["z"] = np.nan
+    points["x"] = points["x"].round(6)
+    # Keep the plot coordinates separate from the rounded matching keys.
+    if axis == "z" and "plot_z" not in points:
+        points["plot_z"] = points["z"]
+    points["z"] = points["z"].round(6)
+    points = points.merge(table[_SYS_KEYS + ["sys_fraction"]], on=_SYS_KEYS,
+                          how="left", validate="one_to_one")
+    missing = points[points["sys_fraction"].isna()]
+    if not missing.empty:
+        example = missing[_SYS_KEYS].iloc[0].to_dict()
+        raise ValueError(f"Systematics CSV missing {len(missing)} plotted point(s); first: {example}")
+    points["sigma_sys"] = points["asym"].abs() * points["sys_fraction"]
+    return points
+
+
+def _systematic_curve(points: pd.DataFrame, axis: str) -> tuple[np.ndarray, np.ndarray]:
+    """Interpolate the +1 sigma height without extrapolation or overshoot."""
+    coord = "plot_z" if axis == "z" else "bin_center"
+    values = points[[coord, "sigma_sys"]].dropna().sort_values(coord)
+    if values[coord].duplicated().any():
+        raise ValueError("Systematic band requires distinct real plotting coordinates")
+    x = values[coord].to_numpy(dtype=float)
+    sigma = values["sigma_sys"].to_numpy(dtype=float)
+    if len(x) < 2:
+        return x, sigma
+    grid = np.unique(np.r_[np.linspace(x[0], x[-1], 250), x])
+    return grid, PchipInterpolator(x, sigma, extrapolate=False)(grid)
+
+
+def _add_systematic_bands(fig: plt.Figure, panels: list[tuple], axis: str,
+                          baseline: float | None = None) -> None:
+    """Draw a constant bottom and an absolute, unscaled uncertainty height."""
+    low, high = fig.axes[0].get_ylim()
+    y0 = baseline if baseline is not None else low + 0.04 * (high - low)
+    if not np.isfinite(y0) or not low <= y0 < high:
+        raise ValueError("Systematic baseline must lie inside the page's y limits")
+    for ax, points in panels:
+        if points.empty:
+            continue
+        x, sigma = _systematic_curve(points, axis)
+        if not len(x):
+            continue
+        if (y0 + sigma > high).any():
+            raise ValueError("Systematic band exceeds y limits; widen the range or lower --sys-y")
+        if len(x) == 1:
+            # A single point cannot define a curve: show a short constant strip.
+            width = 0.01 * (ax.get_xlim()[1] - ax.get_xlim()[0])
+            x = np.array([x[0] - width, x[0] + width])
+            sigma = np.repeat(sigma, 2)
+        ax.fill_between(x, y0, y0 + sigma, color="gray", alpha=0.35,
+                        edgecolor="gray", linewidth=0.6, zorder=1,
+                        label="Systematic uncertainty (+1σ)")
+    # Filling must not move the baseline by changing the shared limits.
+    fig.axes[0].set_ylim(low, high)
+
+
 def _particle_legend(ax: plt.Axes) -> None:
     # Include series present anywhere on the page, even in sparse panels.
     entries = {}
     for panel in ax.figure.axes:
         handles, labels = panel.get_legend_handles_labels()
         entries.update(zip(labels, handles))
+    has_band = "Systematic uncertainty (+1σ)" in entries
     ax.legend(entries.values(), entries.keys(), loc="lower left",
+              bbox_to_anchor=(0, 0.15) if has_band else (0, 0),
               fontsize=8, framealpha=0.7)
 
 
@@ -395,13 +521,15 @@ def _z_ivw_average(df: pd.DataFrame, z_vals: list[float],
         valid = g[g["asym_err"] > 0]
         if valid.empty:
             return pd.Series({"asym": np.nan, "asym_err": np.nan,
-                              "x": g["x"].iloc[0], "q2": g["q2"].iloc[0]})
+                              "x": g["x"].iloc[0], "q2": g["q2"].iloc[0],
+                              "process": g["process"].iloc[0] if "process" in g else DEFAULT_PROCESS})
         w = 1.0 / valid["asym_err"] ** 2
         return pd.Series({
             "asym":     float((valid["asym"] * w).sum() / w.sum()),
             "asym_err": float(1.0 / np.sqrt(w.sum())),
             "x":        g["x"].iloc[0],
             "q2":       g["q2"].iloc[0],
+            "process": g["process"].iloc[0] if "process" in g else DEFAULT_PROCESS,
         })
 
     return (sub
@@ -423,6 +551,8 @@ def _fig_grid(
     qty:      str = _QTY_A,
     diff_ref: str | None = None,
     ylim:     tuple[float, float] | None = None,
+    systematics: pd.DataFrame | None = None,
+    sys_y: float | None = None,
 ) -> plt.Figure:
     """
     Grid: rows = targets, cols = p_T bins.
@@ -476,6 +606,14 @@ def _fig_grid(
 
             _ax_style(ax, xlabel=is_bottom, ylabel=is_left)
 
+    if systematics is not None:
+        points = _systematic_points(df, targets, "z", systematics, diff_ref)
+        panels = [(axes[r, c], points[(points["target"] == target)
+                   & (points["histogram"] == brow.histogram)])
+                  for r, target in enumerate(targets)
+                  for c, brow in enumerate(bins.itertuples())]
+        _add_systematic_bands(fig, panels, "z", sys_y)
+
     # legend — bottom-left corner of the top-left panel
     _particle_legend(axes[0, 0])
 
@@ -498,13 +636,16 @@ def _emit_pages(
     ylim:         tuple | None,
     ylim_diff:    tuple | None,
     epsilon:      float | None = None,
+    systematics: pd.DataFrame | None = None,
+    sys_y: float | None = None,
 ) -> int:
     """Write one comparison page + one difference page. Returns page count."""
     n = 0
 
     # ── comparison ───────────────────────────────────────────────────────────
     title = _page_suptitle(df_all, qty, epsilon=epsilon)
-    fig   = _fig_grid(df_all, targets, bins, title, qty=qty, ylim=ylim)
+    fig   = _fig_grid(df_all, targets, bins, title, qty=qty, ylim=ylim,
+                      systematics=systematics, sys_y=sys_y)
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
     n += 1
@@ -515,7 +656,8 @@ def _emit_pages(
         title   = _page_suptitle(df_all, qty,
                                  suffix=rf" $-$ {reference}", epsilon=epsilon)
         fig     = _fig_grid(df_diff, diff_targets, bins, title,
-                            qty=qty, diff_ref=reference, ylim=ylim_diff)
+                            qty=qty, diff_ref=reference, ylim=ylim_diff,
+                            systematics=systematics, sys_y=sys_y)
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
         n += 1
@@ -534,6 +676,8 @@ def _fig_zavg_diff(
     qty:      str = _QTY_A,
     diff_ref: str | None = None,
     ylim:     tuple[float, float] | None = None,
+    systematics: pd.DataFrame | None = None,
+    sys_y: float | None = None,
 ) -> plt.Figure:
     """
     One row per target, single column.
@@ -569,6 +713,11 @@ def _fig_zavg_diff(
         if is_bottom:
             ax.set_xlabel(r"$\langle P_T \rangle$ (GeV/$c$)", fontsize=10)
 
+    if systematics is not None:
+        points = _systematic_points(df_diff, targets, "bin_center", systematics, diff_ref)
+        panels = [(axes[r, 0], points[points["target"] == target])
+                  for r, target in enumerate(targets)]
+        _add_systematic_bands(fig, panels, "bin_center", sys_y)
     _particle_legend(axes[0, 0])
 
     return fig
@@ -591,13 +740,16 @@ def _emit_zavg_comparison_page(
     qty: str,
     ylim: tuple | None,
     epsilon: float | None = None,
+    systematics: pd.DataFrame | None = None,
+    sys_y: float | None = None,
 ) -> int:
     """Write individual-target z-averaged values versus p_T."""
     df_avg = _z_ivw_average(df_all, z_vals)
     z_str = _zavg_coordinates(df_all, z_vals)
     title = _page_suptitle(df_all, qty,
                           suffix=f"  [z-avg: {{{z_str}}}]", epsilon=epsilon)
-    fig = _fig_zavg_diff(df_avg, targets, title, qty=qty, ylim=ylim)
+    fig = _fig_zavg_diff(df_avg, targets, title, qty=qty, ylim=ylim,
+                      systematics=systematics, sys_y=sys_y)
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
     return 1
@@ -612,6 +764,8 @@ def _emit_zavg_diff_pages(
     qty:          str,
     ylim_diff:    tuple | None,
     epsilon:      float | None = None,
+    systematics: pd.DataFrame | None = None,
+    sys_y: float | None = None,
 ) -> int:
     """IVW-average df_all over z_vals, compute diff vs reference, write one page."""
     if not diff_targets:
@@ -629,7 +783,8 @@ def _emit_zavg_diff_pages(
         epsilon=epsilon,
     )
     fig = _fig_zavg_diff(df_diff, diff_targets, title,
-                         qty=qty, diff_ref=reference, ylim=ylim_diff)
+                         qty=qty, diff_ref=reference, ylim=ylim_diff,
+                            systematics=systematics, sys_y=sys_y)
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
     return 1
@@ -726,12 +881,37 @@ def main() -> None:
         metavar=("YMIN", "YMAX"),
         help="Y range for z-averaged F_LU/F_UU difference page (default: --ylim-flu-diff)",
     )
+    parser.add_argument(
+        "--sys", action="store_true",
+        help="Show systematic bands for the selected charge or weighted average",
+    )
+    parser.add_argument(
+        "--sys-csv", metavar="CSV",
+        help="Percentages for final plotted points (required with --sys)",
+    )
+    parser.add_argument(
+        "--sys-y", type=float, default=None, metavar="Y",
+        help="Fixed systematic-band baseline in data units (default: 4%% above page bottom)",
+    )
     # ── output ───────────────────────────────────────────────────────────────
     parser.add_argument(
         "--output", default=None, metavar="PDF",
         help="Output PDF (default: output/plots/target_dependence[_process].pdf)",
     )
     args = parser.parse_args()
+
+    systematics = None
+    if args.sys_y is not None and not np.isfinite(args.sys_y):
+        parser.error("--sys-y must be finite")
+    if args.sys:
+        if not args.sys_csv:
+            parser.error("--sys requires --sys-csv")
+        try:
+            systematics = _load_systematics(args.sys_csv)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+    elif args.sys_csv or args.sys_y is not None:
+        parser.error("--sys-csv and --sys-y require --sys")
 
     if args.epsilon is not None and not (0.0 < args.epsilon < 1.0):
         parser.error("--epsilon must be in (0, 1)")
@@ -767,12 +947,27 @@ def main() -> None:
         print("No matching targets found — nothing to plot.")
         return
 
+    diff_targets = [t for t in targets if t != args.reference]
+    has_diff     = args.reference in df_all["target"].values and bool(diff_targets)
+
+    if systematics is not None:
+        try:
+            _systematic_points(df_all, targets, "z", systematics)
+            if has_diff:
+                _systematic_points(_compute_diff(df_all, args.reference),
+                                   diff_targets, "z", systematics, args.reference)
+            if args.z_avg:
+                avg = _z_ivw_average(df_all, args.z_avg)
+                _systematic_points(avg, targets, "bin_center", systematics)
+                if has_diff:
+                    _systematic_points(_compute_diff_pt(avg, args.reference),
+                                       diff_targets, "bin_center", systematics, args.reference)
+        except ValueError as exc:
+            parser.error(str(exc))
+
     out = (Path(args.output) if args.output
            else _default_output(process))
     out.parent.mkdir(parents=True, exist_ok=True)
-
-    diff_targets = [t for t in targets if t != args.reference]
-    has_diff     = args.reference in df_all["target"].values and bool(diff_targets)
 
     df_flu = _to_flu_fuu(df_all, args.epsilon) if args.epsilon is not None else None
 
@@ -785,6 +980,7 @@ def main() -> None:
             qty       = _QTY_A,
             ylim      = ylim,
             ylim_diff = ylim_diff,
+            systematics=systematics, sys_y=args.sys_y,
         )
 
         # ── F_LU^sinφ / F_UU pages (only when --epsilon is given) ────────────
@@ -796,6 +992,7 @@ def main() -> None:
                 ylim      = ylim_flu,
                 ylim_diff = ylim_flu_diff,
                 epsilon   = args.epsilon,
+                systematics=systematics, sys_y=args.sys_y,
             )
 
         # z-averaged comparison, then difference, for each observable.
@@ -808,12 +1005,14 @@ def main() -> None:
                 n_pages += _emit_zavg_comparison_page(
                     pdf, data, targets, args.z_avg, qty=qty,
                     ylim=limits, epsilon=epsilon,
+                    systematics=systematics, sys_y=args.sys_y,
                 )
                 if has_diff:
                     n_pages += _emit_zavg_diff_pages(
                         pdf, data, diff_targets, args.z_avg,
                         reference=args.reference, qty=qty,
                         ylim_diff=diff_limits, epsilon=epsilon,
+                        systematics=systematics, sys_y=args.sys_y,
                     )
 
     print(f"Saved: {out}  ({n_pages} pages)")
