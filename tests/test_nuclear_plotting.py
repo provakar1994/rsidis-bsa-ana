@@ -332,3 +332,111 @@ def test_main_always_writes_summary_beside_pdf_without_systematics(tmp_path, mon
     summary = pd.read_csv(out.with_name('selected_summary.csv'))
     assert len(summary) == 2
     np.testing.assert_allclose(summary.value, .3)
+
+
+def test_z_thpq_parser_canonicalizes_order_and_rejects_bad_pairs():
+    from plot_nuclear_dependence import _parse_z_thpq
+    assert _parse_z_thpq(['0.5:5.2;-0.8;2.0', '0.67:-0.8;2']) == {
+        .5: (-.8, 2., 5.2), .67: (-.8, 2.)}
+    for pairs in [['.5'], ['.5:2;2'], ['.5:nan'], ['.5:2', '.5:3']]:
+        with pytest.raises(ValueError):
+            _parse_z_thpq(pairs)
+
+
+def write_combined_input(directory, thpq, encoded, charge='pip', suffix=''):
+    df = sample().query("target == 'C' and z == .5 and particle == 'pi+'" ).copy()
+    df['particle'] = 'pi+' if charge == 'pip' else 'pi-'
+    df['process'] = 'sidis'
+    df['thpq'] = thpq
+    df['variable'] = 'pt'
+    path = directory / f'C_{charge}_e10p7_x0p25_q23p3_z0p5{suffix}_thpq{encoded}_binned_summary.csv'
+    df.to_csv(path, index=False)
+    return path
+
+
+def test_loader_matches_complete_filename_set_before_reading(tmp_path, monkeypatch):
+    import plot_nuclear_dependence as plotting
+    write_combined_input(tmp_path, '-0.8|2.0', 'm0p8AND2p0')
+    path = write_combined_input(tmp_path, '5.2|-0.8|2.0', '5p2ANDm0p8AND2p0')
+    monkeypatch.setattr(plotting, 'COMBINED_DIR', tmp_path)
+    df = plotting._load_all('pt', 'sidis', {.5: (-.8, 2., 5.2)}, .25)
+    assert len(df) == 1
+    assert df.thpq.tolist() == ['-0.8;2.0;5.2']
+    assert df._source_file.tolist() == [path.name]
+    with pytest.raises(ValueError, match='No combined summary files match'):
+        plotting._load_all('pt', 'sidis', {.5: (-.8,)}, .25)
+
+
+def test_loader_checks_filename_against_csv_metadata(tmp_path, monkeypatch):
+    import plot_nuclear_dependence as plotting
+    path = write_combined_input(tmp_path, '-0.8|2.0', 'm0p8AND2p0AND5p2')
+    monkeypatch.setattr(plotting, 'COMBINED_DIR', tmp_path)
+    with pytest.raises(ValueError, match='thpq mismatch'):
+        plotting._load_all('pt', 'sidis', {.5: (-.8, 2., 5.2)}, .25)
+    df = pd.read_csv(path)
+    df['thpq'] = '-0.8|2.0|5.2'
+    df['z'] = .67
+    df.to_csv(path, index=False)
+    with pytest.raises(ValueError, match='z mismatch'):
+        plotting._load_all('pt', 'sidis', {.5: (-.8, 2., 5.2)}, .25)
+
+
+def test_selected_inputs_reject_duplicates_mixed_sets_and_missing_charges():
+    from plot_nuclear_dependence import _validate_selected_inputs
+    df = sample()
+    df['thpq'] = '-0.8;2.0'
+    with pytest.raises(ValueError, match='Duplicate selected bins'):
+        _validate_selected_inputs(pd.concat([df, df.iloc[:1]]), ['C'], 'both', None, 'LH2')
+    mixed = df.copy()
+    mixed.loc[mixed.particle == 'pi+', 'thpq'] = '-0.8;2.0;5.2'
+    with pytest.raises(ValueError, match='Mixed thpq'):
+        _validate_selected_inputs(mixed, ['C'], 'both', None, 'LH2')
+    with pytest.raises(ValueError, match='No matching z/thpq input'):
+        _validate_selected_inputs(df[df.particle == 'pi+'], ['C'], 'both',
+                                   {.5: (-.8, 2.)}, 'LH2')
+
+
+def test_summary_single_thpq_column_tracks_z_average_provenance():
+    from plot_nuclear_dependence import _plot_summary
+    df = sample()
+    df['thpq'] = np.where(df.z == .5, '-0.8;2.0;5.2', '-0.8;2.0')
+    summary = _plot_summary(df, ['LH2', 'C'], 'LH2', [.5, .67], .59)
+    assert summary.query("view == 'z' and z == .5").thpq.eq('-0.8;2.0;5.2').all()
+    assert summary.query("view == 'z' and z == .67").thpq.eq('-0.8;2.0').all()
+    assert summary.query("view == 'zavg'").thpq.eq('0.5:-0.8;2.0;5.2|0.67:-0.8;2.0').all()
+
+
+def test_both_charge_loader_prefers_exact_then_largest_sorted_subset(tmp_path, monkeypatch):
+    import plot_nuclear_dependence as plotting
+    write_combined_input(tmp_path, '-0.8|2.0|5.2', 'm0p8AND2p0AND5p2', charge='pip')
+    write_combined_input(tmp_path, '-0.8|2.0', 'm0p8AND2p0', charge='pim')
+    write_combined_input(tmp_path, '-0.8|5.2', 'm0p8AND5p2', charge='pim')
+    write_combined_input(tmp_path, '2.0', '2p0', charge='pim')
+    write_combined_input(tmp_path, '-0.8|2.0|9.0', 'm0p8AND2p0AND9p0', charge='pim')
+    monkeypatch.setattr(plotting, 'COMBINED_DIR', tmp_path)
+    requested = {.5: (-.8, 2., 5.2)}
+    df = plotting._load_all('pt', 'sidis', requested, .25, allow_subsets=True)
+    assert df.query("particle == 'pi+'" ).thpq.tolist() == ['-0.8;2.0;5.2']
+    assert df.query("particle == 'pi-'" ).thpq.tolist() == ['-0.8;2.0']
+    assert df.query("particle == 'pi-'" ).missing_thpq.tolist() == ['pi-:0.5,5.2']
+    plotting._validate_selected_inputs(df, ['C'], 'both', requested, 'missing')
+    exact_only = plotting._load_all('pt', 'sidis', requested, .25)
+    assert exact_only.particle.tolist() == ['pi+']
+    summary = plotting._plot_summary(df, ['C'], 'missing', [.5])
+    both = summary.query("particle == 'both'")
+    assert both.missing_thpq.eq('pi-:0.5,5.2').all()
+    assert both.query("view == 'z'").thpq.tolist() == ['-0.8;2.0;5.2']
+    assert both.query("view == 'zavg'").thpq.tolist() == ['0.5:-0.8;2.0;5.2']
+
+
+def test_summary_reports_reference_and_multiple_z_omissions():
+    from plot_nuclear_dependence import _plot_summary
+    df = sample()
+    df['thpq'] = '-0.8;2.0'
+    df['_preferred_thpq'] = '-0.8;2.0;5.2'
+    df['missing_thpq'] = [f'{p}:{z:g},5.2' if p == 'pi-' else ''
+                          for p, z in zip(df.particle, df.z)]
+    summary = _plot_summary(df, ['C'], 'LH2', [.5, .67])
+    row = summary.query("reference == 'LH2' and particle == 'both' and view == 'zavg'").iloc[0]
+    assert row.missing_thpq == 'pi-:0.5,5.2|pi-:0.67,5.2|LH2/pi-:0.5,5.2|LH2/pi-:0.67,5.2'
+    assert row.thpq == '0.5:-0.8;2.0;5.2|0.67:-0.8;2.0;5.2'

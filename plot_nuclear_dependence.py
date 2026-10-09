@@ -26,8 +26,8 @@ Page numbers assume all observables and reference differences are enabled.
 
 Select one x with --x. --z (alias --z-avg) filters all pages to the
 specified z settings and adds z-averaged comparison and difference pages. If --x is omitted,
-inputs must contain exactly one x. No thpq filtering is applied: inputs are
-already combined summaries.
+inputs must contain exactly one x. Inputs are already combined summaries. Use --z-thpq for exact nominal z/thpq filename
+matching; plain --z is rejected if selected inputs mix thpq combinations.
 
 Use --sys --sys-csv FILE for +1σ bands from percentages of final plotted
 values, including explicit both-charge averages and target differences.
@@ -132,28 +132,145 @@ def _default_output(process: str) -> Path:
     return PLOTS_DIR / f"target_dependence{tag}.pdf"
 
 
-def _load_all(variable: str, process: str) -> pd.DataFrame:
-    """Load process-matched *_binned_summary.csv files, both particles."""
+def _thpq_values(text: str) -> tuple[float, ...]:
+    """Canonical numerical set from CSV/CLI delimiters or filename encodings."""
+    tokens = re.split(r"AND|[;|]", str(text))
+    try:
+        values = [round(float(t.strip().replace("m", "-").replace("p", ".")), 6)
+                  for t in tokens]
+    except ValueError as exc:
+        raise ValueError(f"Invalid thpq list: {text!r}") from exc
+    if not values or not np.isfinite(values).all() or len(set(values)) != len(values):
+        raise ValueError(f"thpq values must be finite and distinct: {text!r}")
+    return tuple(sorted(values))
+
+
+def _thpq_text(values: tuple[float, ...]) -> str:
+    return ";".join(str(float(v)) for v in values)
+
+
+def _parse_z_thpq(items: list[str]) -> dict[float, tuple[float, ...]]:
+    pairs = {}
+    for item in items:
+        try:
+            z_text, thpq = item.split(":", 1)
+            z = round(float(z_text), 6)
+        except ValueError as exc:
+            raise ValueError("--z-thpq requires quoted Z:THPQ;THPQ pairs") from exc
+        if not np.isfinite(z) or not 0 < z < 1:
+            raise ValueError("--z-thpq nominal z must be finite and in (0,1)")
+        if z in pairs:
+            raise ValueError(f"--z-thpq repeats nominal z={z}")
+        pairs[z] = _thpq_values(thpq)
+    return pairs
+
+
+def _filename_selection(path: Path) -> dict:
+    match = re.fullmatch(
+        r"(?P<target>[^_]+)_(?P<particle>pip|pim)_e[^_]+_x(?P<x>[^_]+)"
+        r"_q2(?P<q2>[^_]+)_z(?P<z>[^_]+)(?:_(?P<process>.+))?"
+        r"_thpq(?P<thpq>.+)_binned_summary\.csv", path.name)
+    if match is None:
+        raise ValueError(f"Cannot decode combined-summary filename: {path.name}")
+    info = match.groupdict()
+    for key in ("x", "q2", "z"):
+        info[key] = float(info[key].replace("m", "-").replace("p", "."))
+    info["particle"] = "pi+" if info["particle"] == "pip" else "pi-"
+    info["process"] = _normalize_process(info["process"])
+    info["thpq"] = _thpq_values(info["thpq"])
+    return info
+
+
+def _load_all(variable: str, process: str,
+              z_thpq: dict[float, tuple[float, ...]] | None = None,
+              x: float | None = None, allow_subsets: bool = False) -> pd.DataFrame:
+    """Prefer exact sets; optionally choose the largest available subset per charge."""
     process = _normalize_process(process)
     frames = []
-    files = _combined_summary_files(process)
-    for csv in files:
-        df  = pd.read_csv(csv)
-        if "process" in df.columns:
-            df = df[df["process"].fillna(DEFAULT_PROCESS).map(_normalize_process) == process]
-        df = df.copy()
-        df["process"] = process
-        sub = df[df["variable"] == variable]
-        if not sub.empty:
-            frames.append(sub)
+    candidates = []
+    for csv in _combined_summary_files(process):
+        info = _filename_selection(csv)
+        if x is not None and not np.isclose(info["x"], x, atol=1e-6, rtol=0):
+            continue
+        if z_thpq is not None:
+            expected = z_thpq.get(round(info["z"], 6))
+            if expected is None:
+                continue
+            matches = (set(info["thpq"]).issubset(expected) if allow_subsets
+                       else info["thpq"] == expected)
+            if not matches:
+                continue
+        candidates.append((csv, info))
+    if z_thpq is not None and allow_subsets:
+        groups = {}
+        for csv, info in candidates:
+            key = tuple(info[k] for k in ("target", "particle", "x", "q2", "z"))
+            groups.setdefault(key, []).append((csv, info))
+        candidates = []
+        for group in groups.values():
+            # Descending size, then ascending sorted tuple: a deterministic first match.
+            preferred = min((info["thpq"] for _, info in group),
+                            key=lambda values: (-len(values), values))
+            candidates.extend((csv, info) for csv, info in group if info["thpq"] == preferred)
+    for csv, info in candidates:
+        df = pd.read_csv(csv)
+        sub = df[df["variable"] == variable].copy()
+        if sub.empty:
+            continue
+        for key in ("x", "q2", "z", "target", "particle"):
+            matches = (np.isclose(sub[key], info[key], atol=1e-6, rtol=0)
+                       if key in ("x", "q2", "z") else sub[key].eq(info[key]))
+            if not np.all(matches):
+                raise ValueError(f"Filename/CSV {key} mismatch in {csv.name}")
+        if "process" in sub and not sub["process"].fillna(DEFAULT_PROCESS).map(_normalize_process).eq(process).all():
+            raise ValueError(f"Filename/CSV process mismatch in {csv.name}")
+        if "thpq" in sub and not sub["thpq"].map(lambda value: _thpq_values(value) == info["thpq"]).all():
+            raise ValueError(f"Filename/CSV thpq mismatch in {csv.name}")
+        sub["process"] = process
+        sub["thpq"] = _thpq_text(info["thpq"])
+        expected = z_thpq[round(info["z"], 6)] if z_thpq else info["thpq"]
+        sub["_preferred_thpq"] = _thpq_text(expected)
+        omitted = sorted(set(expected) - set(info["thpq"]))
+        sub["missing_thpq"] = (f"{info['particle']}:{info['z']:.6g},"
+                               + ",".join(str(float(v)) for v in omitted)) if omitted else ""
+        sub["_source_file"] = csv.name
+        frames.append(sub)
     if not frames:
-        available = ", ".join(_available_processes()) or "none"
-        raise FileNotFoundError(
-            f"No *_binned_summary.csv rows found in {COMBINED_DIR} "
-            f"for process={process!r}, variable={variable!r}; "
-            f"available processes: {available}"
-        )
+        raise ValueError(f"No combined summary files match process={process!r}, "
+                         f"variable={variable!r}, x={x}, z/thpq={z_thpq}")
     return pd.concat(frames, ignore_index=True)
+
+
+def _validate_selected_inputs(df: pd.DataFrame, requested: list[str] | None,
+                              particle: str, z_thpq: dict | None,
+                              reference: str) -> None:
+    """Reject mixed combinations, duplicate bins, and incomplete explicit pairs."""
+    keys = [key for key in ("process", "x", "target", "particle", "z", "histogram") if key in df]
+    if df.duplicated(keys).any():
+        duplicate = df.loc[df.duplicated(keys, keep=False)]
+        files = duplicate["_source_file"].unique().tolist() if "_source_file" in duplicate else []
+        raise ValueError(f"Duplicate selected bins; select exact --z-thpq pairs. Files: {files}")
+    if "thpq" in df and not (z_thpq is not None and particle == "both"):
+        for z, group in df.groupby("z"):
+            if group["thpq"].nunique() != 1:
+                raise ValueError(f"Mixed thpq combinations at z={z}; use exact --z-thpq pairs")
+    if z_thpq is not None:
+        targets = requested if requested else _ordered_targets(df, None)
+        # Include an available reference even if it is not a displayed target.
+        targets = list(dict.fromkeys([*targets, *([reference] if reference in df.target.values else [])]))
+        particles = ["pi+", "pi-"] if particle == "both" else [particle]
+        missing = [(target, charge, z) for target in targets for charge in particles for z in z_thpq
+                   if df[(df.target == target) & (df.particle == charge)
+                         & np.isclose(df.z, z, atol=1e-6, rtol=0)].empty]
+        if missing:
+            raise ValueError(f"No matching z/thpq input for target, particle, z: {missing}")
+
+
+def _zavg_thpq(df: pd.DataFrame) -> str:
+    if "thpq" not in df:
+        return ""
+    return "|".join(f"{z:.6g}:{group['thpq'].iloc[0]}"
+                    for z, group in df.groupby("z", sort=True))
 
 
 def _select_kinematics(df: pd.DataFrame, x: float | None,
@@ -522,7 +639,8 @@ def _z_ivw_average(df: pd.DataFrame, z_vals: list[float],
         if valid.empty:
             return pd.Series({"asym": np.nan, "asym_err": np.nan,
                               "x": g["x"].iloc[0], "q2": g["q2"].iloc[0],
-                              "process": g["process"].iloc[0] if "process" in g else DEFAULT_PROCESS})
+                              "process": g["process"].iloc[0] if "process" in g else DEFAULT_PROCESS,
+                              "thpq": _zavg_thpq(g)})
         w = 1.0 / valid["asym_err"] ** 2
         return pd.Series({
             "asym":     float((valid["asym"] * w).sum() / w.sum()),
@@ -530,6 +648,7 @@ def _z_ivw_average(df: pd.DataFrame, z_vals: list[float],
             "x":        g["x"].iloc[0],
             "q2":       g["q2"].iloc[0],
             "process": g["process"].iloc[0] if "process" in g else DEFAULT_PROCESS,
+            "thpq": _zavg_thpq(g),
         })
 
     return (sub
@@ -790,6 +909,37 @@ def _emit_zavg_diff_pages(
     return 1
 
 
+def _summary_input_provenance(points: pd.DataFrame, inputs: pd.DataFrame,
+                              view: str, reference: str) -> pd.DataFrame:
+    """Describe preferred/actual coverage and omissions of all contributing inputs."""
+    points = points.copy()
+    thpq_values, omissions = [], []
+    for _, point in points.iterrows():
+        charges = ["pi+", "pi-"] if point["particle"] == "both" else [point["particle"]]
+        source = inputs[(inputs["target"] == point["target"])
+                        & inputs["particle"].isin(charges)
+                        & (inputs["histogram"] == point["histogram"])]
+        if view == "z":
+            source = source[np.isclose(source["z"], point["z"], atol=1e-6, rtol=0)]
+        coordinate_inputs = source.copy()
+        if point["particle"] == "both" and "_preferred_thpq" in source:
+            coordinate_inputs["thpq"] = source["_preferred_thpq"]
+        text = (_zavg_thpq(coordinate_inputs) if view == "zavg"
+                else coordinate_inputs["thpq"].iloc[0] if "thpq" in source and not source.empty else "")
+        thpq_values.append(text)
+        missing = source["missing_thpq"].drop_duplicates().tolist() if "missing_thpq" in source else []
+        if reference and "missing_thpq" in inputs:
+            ref = inputs[(inputs["target"] == reference) & inputs["particle"].isin(charges)
+                         & (inputs["histogram"] == point["histogram"])]
+            if view == "z":
+                ref = ref[np.isclose(ref["z"], point["z"], atol=1e-6, rtol=0)]
+            missing.extend(f"{reference}/{v}" for v in ref["missing_thpq"].drop_duplicates() if v)
+        omissions.append("|".join(dict.fromkeys(v for v in missing if v)))
+    points["thpq"] = thpq_values
+    points["missing_thpq"] = omissions
+    return points
+
+
 def _plot_summary(df_all: pd.DataFrame, targets: list[str], reference: str,
                   z_vals: list[float] | None,
                   epsilon: float | None = None) -> pd.DataFrame:
@@ -821,10 +971,11 @@ def _plot_summary(df_all: pd.DataFrame, targets: list[str], reference: str,
                     both = _particle_average(plotted, axis)
                     both["particle"] = "both"
                     metadata_keys = ["target", "histogram"] + (["z"] if view == "z" else [])
-                    metadata = [c for c in ("bin_center", "hmin", "hmax") if c not in both]
+                    metadata = [c for c in ("bin_center", "hmin", "hmax", "thpq") if c not in both and c in plotted]
                     both = both.merge(plotted[metadata_keys + metadata].drop_duplicates(metadata_keys),
                                       on=metadata_keys, validate="many_to_one")
                     points = pd.concat([points, both], ignore_index=True)
+                points = _summary_input_provenance(points, data, view, ref)
                 points["process"] = data["process"].iloc[0] if "process" in data else DEFAULT_PROCESS
                 points["x"] = data["x"].iloc[0]
                 points["q2"] = data["q2"].iloc[0]
@@ -841,7 +992,7 @@ def _plot_summary(df_all: pd.DataFrame, targets: list[str], reference: str,
                     points["plot_z"] = points["z"]
                 points = points.rename(columns={"asym": "value", "asym_err": "stat_err"})
                 frames.append(points)
-    columns = [*_SYS_KEYS, "observable", "q2", "epsilon", "variable", "plot_z",
+    columns = [*_SYS_KEYS, "thpq", "missing_thpq", "observable", "q2", "epsilon", "variable", "plot_z",
                "bin_center", "hmin", "hmax", "z_selection", "value", "stat_err"]
     return pd.concat(frames, ignore_index=True)[columns]
 
@@ -912,10 +1063,17 @@ def main() -> None:
         help="Y range for F_LU/F_UU difference page",
     )
     # ── z-averaged difference ─────────────────────────────────────────────────
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--z-avg", "--z", nargs="+", type=float, default=None, metavar="Z",
         help="Select z settings for all pages and add their inverse-variance "
              "averaged comparison and difference pages vs p_T",
+    )
+    selection.add_argument(
+        "--z-thpq", nargs="+", metavar="Z:THPQ;THPQ",
+        help="Preferred nominal z/thpq combinations, e.g. '0.5:-0.8;2.0;5.2'; "
+             "exact for one charge, largest available subset allowed for both; "
+             "also enables z-averaged pages; quote each pair",
     )
     parser.add_argument(
         "--ylim-zavg", nargs=2, type=float, default=None,
@@ -956,6 +1114,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    z_thpq = None
+    if args.z_thpq:
+        try:
+            z_thpq = _parse_z_thpq(args.z_thpq)
+        except ValueError as exc:
+            parser.error(str(exc))
+        args.z_avg = list(z_thpq)
+
     systematics = None
     if args.sys_y is not None and not np.isfinite(args.sys_y):
         parser.error("--sys-y must be finite")
@@ -987,15 +1153,23 @@ def main() -> None:
     ylim_flu_zavg_diff = tuple(args.ylim_flu_zavg_diff) if args.ylim_flu_zavg_diff else ylim_flu_diff
 
     try:
-        df_all = _load_all(args.variable, process)
+        df_all = _load_all(args.variable, process, z_thpq, args.x, args.particle == "both")
         if args.particle != "both":
             df_all = df_all[df_all["particle"] == args.particle].copy()
         if df_all.empty:
             raise ValueError(f"No data for particle={args.particle}")
         df_all = _select_kinematics(df_all, args.x, args.z_avg)
+        if args.targets:
+            df_all = df_all[df_all.target.isin([*args.targets, args.reference])].copy()
+        _validate_selected_inputs(df_all, args.targets, args.particle, z_thpq, args.reference)
         df_all = _apply_real_z(df_all, args.real_z, args.real_z_csv)
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         parser.error(str(exc))
+    if z_thpq is not None and "_source_file" in df_all:
+        for row in df_all[["target", "particle", "z", "thpq", "missing_thpq", "_source_file"] ].drop_duplicates().itertuples(index=False, name=None):
+            target, charge, z, thpq, missing, filename = row
+            detail = f"; missing_thpq={missing}" if missing else "; exact match"
+            print(f"Selected {target} {charge} z={z:g}: thpq={thpq}{detail} [{filename}]")
     targets = _ordered_targets(df_all, args.targets)
     bins    = _pt_bins(df_all)
 

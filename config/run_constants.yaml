@@ -15,14 +15,14 @@
 
 period_1:   # First run period (pass 0, 2025)
   beam_bunch_ns:    4.0    # beam bunch spacing [ns]
-  beam_polarization: 0.824  # |P_e|, dimensionless (0–1); used to convert A_raw → A_phys Source: https://logbooks.jlab.org/entry/4445406
+  beam_polarization: 0.824  # +/- 0.69% |P_e|, dimensionless (0–1); used to convert A_raw → A_phys Source: https://logbooks.jlab.org/entry/4445406
   dummy_scale:
     LH2: 7.2323
     LD2: 7.7552
 
 period_2:   # Second run period (Phase II)
   beam_bunch_ns:    4.0    # beam bunch spacing [ns]
-  beam_polarization: 0.53  # |P_e|, dimensionless (0–1); used to convert A_raw → A_phys Source: https://logbooks.jlab.org/entry/4445406
+  beam_polarization: 0.6095  # +/- +9.81/-11.44% |P_e|, dimensionless (0–1); used to convert A_raw → A_phys Source: https://hallcweb.jlab.org/elogs/R-SIDIS+Experiment/158
   dummy_scale:
     LH2: 3.90311
     LD2: 4.18541

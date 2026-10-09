@@ -278,6 +278,36 @@ python plot_nuclear_dependence.py --x 0.25 --z 0.5 0.67 \
     --real-z 0.5=0.513 0.67=0.681 --particle both
 ```
 
+To select preferred input combinations, replace `--z` with nominal z–thpq pairs:
+
+```bash
+python plot_nuclear_dependence.py --x 0.25 --particle pi+ \
+    --targets LD2 C Cu LH2 \
+    --z-thpq '0.5:-0.8;2.0;5.2' '0.67:-0.8;2.0' \
+    --real-z 0.5=0.53 0.67=0.71 --epsilon 0.59
+```
+
+Quote each pair so that the shell does not interpret semicolons. `--z-thpq`
+sorts the numerical thpq values and enables the same z-averaged pages as `--z`.
+For `--particle pi+` or `pi-`, the filename must match the complete set exactly.
+For `--particle both`, the provided set is preferred: each target/charge/z first
+uses an exact match, otherwise the largest available nonempty subset. Equal-size
+subsets are tried in ascending lexicographic order of their sorted numerical
+values; the first matching combination is used. Values outside the requested
+set are never included. The terminal prints each selected file, actual combination,
+and any omissions. It cannot be combined
+with `--z`/`--z-avg`. Selected filename metadata must agree with the CSV contents.
+Duplicate selected bins or missing target/charge/z inputs are errors; with
+`--particle both`, every included target must have an exact or subset match for
+both charges at every requested z.
+Plain `--z` and unfiltered runs remain available, but reject mixed thpq sets at a
+selected nominal z rather than silently combining them.
+
+In the current example inputs, LD2/C/Cu π⁻ at z=0.5 use `-0.8;2.0`, while π⁺
+use `-0.8;2.0;5.2`. The example above selects π⁺ exactly. Removing `--particle pi+` uses both
+charges and automatically selects the smaller π⁻ combination, reporting the
+omitted 5.2 setting.
+
 For target-, charge-, or bin-dependent coordinates, use `--real-z-csv real_z.csv`.
 Required columns are `z` (nominal) and `real_z`; optional matching columns are
 `x`, `target`, `particle`, and `histogram`. Every provided key must be filled;
@@ -321,7 +351,7 @@ Page layout:
 - **Page 7** — F_LU^sinφ/F_UU, individual targets vs p_T, averaged over selected z
 - **Page 8** — F_LU^sinφ/F_UU difference vs p_T, averaged over selected z
 
-Pages 5–8 require `--z` (alias `--z-avg`); pages 7–8 also require
+Pages 5–8 require `--z` (alias `--z-avg`) or `--z-thpq`; pages 7–8 also require
 `--epsilon`. Page numbers assume all eight pages are enabled. Comparison pages
 include the reference target and are produced even when no reference difference
 is available. Set their y ranges with `--ylim-zavg` and `--ylim-flu-zavg`,
@@ -333,7 +363,7 @@ where `F_LU^sinφ / F_UU = A_LU^sinφ / sqrt(2 ε (1−ε))`.
 Every successful plotting run also writes `<PDF stem>_summary.csv` beside the
 PDF, without an extra flag. It contains the selected per-charge values and
 `particle=both` statistical weighted averages, individual-target values and
-reference differences, and z-averaged values when `--z` is enabled. A_LU rows use
+reference differences, and z-averaged values when `--z` or `--z-thpq` is enabled. A_LU rows use
 `observable=alu`; additional `observable=flu_fuu` rows appear with `--epsilon`.
 `value` and `stat_err` are the final plotted value and statistical uncertainty.
 The summary also records nominal and real z, p_T centers and bin edges, the
@@ -354,6 +384,8 @@ Summary CSV column meanings:
 | `particle` | `pi+` or `pi-` for an individual charge; `both` for their inverse-statistical-variance weighted average, not their sum. |
 | `view` | `z`: a separate value for each nominal z and p_T bin. `zavg`: a value averaged over selected nominal z settings, plotted versus p_T. |
 | `z` | Nominal z used for data selection and matching to systematics inputs. Empty for `view=zavg`. |
+| `thpq` | For an individual charge, the actual selected combination. For `particle=both`, the preferred combination, with omissions recorded separately. For `view=zavg`, the nominal-z mapping, e.g. `0.5:-0.8;2.0;5.2\|0.67:-0.8;2.0`. |
+| `missing_thpq` | Empty for exact matches. Otherwise, charge, nominal z, and omitted settings, e.g. `pi-:0.5,5.2`. Multiple entries use `\|`. Weighted averages retain both charges’ omissions; difference rows also retain reference omissions prefixed by the reference target, e.g. `LH2/pi-:0.5,5.2`. |
 | `histogram` | Exact bin identifier from the combined summary, such as `phipq_ptbin0`; use this identifier in the systematics CSV. |
 | `observable` | `alu` means A_LU^sinφ; `flu_fuu` means F_LU^sinφ/F_UU, obtained by dividing A_LU by `sqrt(2 * epsilon * (1 - epsilon))`. |
 | `epsilon` | User-supplied virtual-photon polarization parameter. Recorded on both observable types when `--epsilon` is supplied; empty otherwise. |
@@ -418,10 +450,12 @@ actual height in observable units.
 The example `config/systematics_example.csv` contains **illustrative percentages,
 not uncertainty estimates**, for SIDIS, x=0.25, targets LH2/LD2/C/Cu, nominal z=0.5/0.67,
 and all three particle selections. Its z-averaged rows are for that exact pair
-of nominal z settings. Test all eight pages with:
+of nominal z settings. Systematics matching still uses the existing CSV keys;
+use percentages estimated for the chosen thpq inputs. Test all eight pages with:
 
 ```bash
-python plot_nuclear_dependence.py --x 0.25 --z 0.5 0.67 \
+python plot_nuclear_dependence.py --x 0.25 --particle pi+ \
+    --z-thpq '0.5:-0.8;2.0;5.2' '0.67:-0.8;2.0' \
     --targets LD2 C Cu LH2 --epsilon 0.59 \
     --real-z 0.5=0.513 0.67=0.681 \
     --sys --sys-csv config/systematics_example.csv \
