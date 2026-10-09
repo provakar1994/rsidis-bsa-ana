@@ -330,6 +330,56 @@ which default to `--ylim` and `--ylim-flu`, respectively.
 where `F_LU^sinφ / F_UU = A_LU^sinφ / sqrt(2 ε (1−ε))`.
 
 
+Every successful plotting run also writes `<PDF stem>_summary.csv` beside the
+PDF, without an extra flag. It contains the selected per-charge values and
+`particle=both` statistical weighted averages, individual-target values and
+reference differences, and z-averaged values when `--z` is enabled. A_LU rows use
+`observable=alu`; additional `observable=flu_fuu` rows appear with `--epsilon`.
+`value` and `stat_err` are the final plotted value and statistical uncertainty.
+The summary also records nominal and real z, p_T centers and bin edges, the
+selected nominal z settings (`z_selection`, separated by `|`), and kinematic
+metadata. Z-averaged rows have empty `z` and `plot_z`. Values are unshifted by the
+visual pion offsets. Use this CSV to estimate systematic percentages; generating
+it does not require `--sys` and does not modify the systematics input CSV.
+
+
+Summary CSV column meanings:
+
+| Column | Meaning |
+|---|---|
+| `process` | Analysis process selected by `--process`, such as `sidis` or `exclusive`. |
+| `x`, `q2` | Nominal Bjorken x and Q² (GeV²) for the selected kinematic setting; these are not acceptance-averaged quantities. |
+| `target` | Target whose value is reported, or the first target in a difference. |
+| `reference` | Empty for an individual-target value. Otherwise, the subtracted target: `target=C, reference=LH2` means C − LH2. |
+| `particle` | `pi+` or `pi-` for an individual charge; `both` for their inverse-statistical-variance weighted average, not their sum. |
+| `view` | `z`: a separate value for each nominal z and p_T bin. `zavg`: a value averaged over selected nominal z settings, plotted versus p_T. |
+| `z` | Nominal z used for data selection and matching to systematics inputs. Empty for `view=zavg`. |
+| `histogram` | Exact bin identifier from the combined summary, such as `phipq_ptbin0`; use this identifier in the systematics CSV. |
+| `observable` | `alu` means A_LU^sinφ; `flu_fuu` means F_LU^sinφ/F_UU, obtained by dividing A_LU by `sqrt(2 * epsilon * (1 - epsilon))`. |
+| `epsilon` | User-supplied virtual-photon polarization parameter. Recorded on both observable types when `--epsilon` is supplied; empty otherwise. |
+| `variable` | Binning variable selected by `--variable` (normally `pt`). |
+| `plot_z` | Unshifted horizontal coordinate for a z plot: the supplied real z, or nominal z when no mapping exists. For `particle=both`, this is the arithmetic midpoint of the two charge coordinates. Difference rows use the non-reference target's coordinates. Empty for `view=zavg`. |
+| `bin_center` | Input bin center used as the horizontal coordinate on z-averaged p_T plots; it is not recalculated from event-level acceptance. For the default `pt` variable, units are GeV/c. |
+| `hmin`, `hmax` | Lower and upper bin edges of `variable`; for `pt`, units are GeV/c. |
+| `z_selection` | Run-level list of selected nominal z settings, separated by `\|`, for example `0.5\|0.67`. For z-averaged rows, this identifies the settings requested for the average; individual groups combine their available valid points. |
+| `value` | Final dimensionless observable, weighted average, or target-minus-reference difference represented by the row. |
+| `stat_err` | Absolute 1σ statistical uncertainty on `value`; systematic uncertainty is not included. |
+
+For either z averaging or charge averaging, the statistical weights are
+`w_i = 1 / stat_err_i**2`, the average is `sum(w_i * value_i) / sum(w_i)`,
+and its statistical error is `1 / sqrt(sum(w_i))`. Charge averages require
+finite values and positive finite statistical errors for both charges.
+Target differences use `sqrt(target_stat_err**2 + reference_stat_err**2)`.
+For `view=zavg` differences, each target/charge is first averaged over z,
+then the reference is subtracted; `particle=both` subsequently combines the
+two charge differences using their propagated statistical errors.
+
+For example, `target=C, reference=LH2, particle=both, view=zavg,
+observable=alu` reports the charge-weighted average of the z-averaged C − LH2
+asymmetry differences in that `histogram` bin. The matching systematics row
+uses those same identifiers, with empty `z`, and its percentages apply directly
+to the exported `value`.
+
 Systematic bands are optional. Enable them with `--sys --sys-csv FILE`.
 The CSV specifies percentages **directly for final plotted values**, including
 explicit weighted-average, target-difference, and z-averaged entries:

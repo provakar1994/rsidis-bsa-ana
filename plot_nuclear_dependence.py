@@ -790,6 +790,62 @@ def _emit_zavg_diff_pages(
     return 1
 
 
+def _plot_summary(df_all: pd.DataFrame, targets: list[str], reference: str,
+                  z_vals: list[float] | None,
+                  epsilon: float | None = None) -> pd.DataFrame:
+    """Export the same final values and statistical errors used by every page."""
+    frames = []
+    diff_targets = [t for t in targets if t != reference]
+    has_diff = reference in df_all["target"].values and bool(diff_targets)
+    z_selection = "|".join(f"{z:.6g}" for z in sorted(df_all["z"].unique()))
+    observables = [("alu", df_all)]
+    if epsilon is not None:
+        observables.append(("flu_fuu", _to_flu_fuu(df_all, epsilon)))
+    for observable, data in observables:
+        views = [("z", data)]
+        if z_vals:
+            views.append(("zavg", _z_ivw_average(data, z_vals)))
+        for view, values in views:
+            comparisons = [("", values, targets)]
+            if has_diff:
+                differences = (_compute_diff(values, reference) if view == "z"
+                               else _compute_diff_pt(values, reference))
+                comparisons.append((reference, differences, diff_targets))
+            for ref, plotted, included_targets in comparisons:
+                plotted = plotted[plotted["target"].isin(included_targets)].copy()
+                if plotted.empty:
+                    continue
+                points = plotted.copy()
+                if {"pi+", "pi-"}.issubset(plotted["particle"].unique()):
+                    axis = "z" if view == "z" else "bin_center"
+                    both = _particle_average(plotted, axis)
+                    both["particle"] = "both"
+                    metadata_keys = ["target", "histogram"] + (["z"] if view == "z" else [])
+                    metadata = [c for c in ("bin_center", "hmin", "hmax") if c not in both]
+                    both = both.merge(plotted[metadata_keys + metadata].drop_duplicates(metadata_keys),
+                                      on=metadata_keys, validate="many_to_one")
+                    points = pd.concat([points, both], ignore_index=True)
+                points["process"] = data["process"].iloc[0] if "process" in data else DEFAULT_PROCESS
+                points["x"] = data["x"].iloc[0]
+                points["q2"] = data["q2"].iloc[0]
+                points["epsilon"] = epsilon
+                points["reference"] = ref
+                points["view"] = view
+                points["observable"] = observable
+                points["z_selection"] = z_selection
+                points["variable"] = data["variable"].iloc[0] if "variable" in data else "pt"
+                if view == "zavg":
+                    points["z"] = np.nan
+                    points["plot_z"] = np.nan
+                elif "plot_z" not in points:
+                    points["plot_z"] = points["z"]
+                points = points.rename(columns={"asym": "value", "asym_err": "stat_err"})
+                frames.append(points)
+    columns = [*_SYS_KEYS, "observable", "q2", "epsilon", "variable", "plot_z",
+               "bin_center", "hmin", "hmax", "z_selection", "value", "stat_err"]
+    return pd.concat(frames, ignore_index=True)[columns]
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1015,7 +1071,11 @@ def main() -> None:
                         systematics=systematics, sys_y=args.sys_y,
                     )
 
+    summary_path = out.with_name(f"{out.stem}_summary.csv")
+    summary = _plot_summary(df_all, targets, args.reference, args.z_avg, args.epsilon)
+    summary.to_csv(summary_path, index=False)
     print(f"Saved: {out}  ({n_pages} pages)")
+    print(f"Saved: {summary_path}  ({len(summary)} summary rows)")
 
 
 if __name__ == "__main__":

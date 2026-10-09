@@ -279,3 +279,56 @@ def test_missing_entries_fail_before_output_is_created(tmp_path, monkeypatch, ca
     assert exc.value.code == 2
     assert 'missing' in capsys.readouterr().err
     assert not out.exists()
+
+
+def test_automatic_summary_contains_final_z_averages_and_charge_averages():
+    from plot_nuclear_dependence import _plot_summary
+    df = _apply_real_z(sample(), ['0.5=0.53', '0.67=0.71'])
+    summary = _plot_summary(df, ['LH2', 'C'], 'LH2', [.5, .67], .59)
+    assert len(summary) == 54
+    assert set(summary.observable) == {'alu', 'flu_fuu'}
+    assert set(summary.particle) == {'pi+', 'pi-', 'both'}
+    row = summary.query("observable == 'alu' and target == 'C' and reference == '' "
+                        "and view == 'zavg' and particle == 'both'").iloc[0]
+    assert row.value == pytest.approx(.34)
+    assert row.stat_err == pytest.approx(.02 / np.sqrt(2.5))
+    assert row.bin_center == .1
+    assert pd.isna(row.z) and pd.isna(row.plot_z)
+    assert row.z_selection == '0.5|0.67'
+    difference = summary.query("observable == 'alu' and target == 'C' and reference == 'LH2' "
+                               "and view == 'zavg' and particle == 'both'").iloc[0]
+    assert difference.value == pytest.approx(.2)
+    assert difference.stat_err == pytest.approx(.02 / np.sqrt(1.25))
+    real = summary.query("observable == 'alu' and target == 'C' and reference == '' "
+                         "and view == 'z' and particle == 'both'")
+    np.testing.assert_allclose(real.plot_z, [.53, .71])
+    scaled = summary.query("observable == 'flu_fuu' and target == 'C' and reference == '' "
+                           "and view == 'zavg' and particle == 'both'").iloc[0]
+    assert scaled.value == pytest.approx(row.value / np.sqrt(2 * .59 * .41))
+
+
+def test_summary_respects_single_particle_targets_and_disabled_pages():
+    from plot_nuclear_dependence import _plot_summary
+    summary = _plot_summary(sample().query("particle == 'pi-'"), ['C'], 'missing', None)
+    assert len(summary) == 2
+    assert summary.target.eq('C').all()
+    assert summary.particle.eq('pi-').all()
+    assert summary.observable.eq('alu').all()
+    assert summary.view.eq('z').all()
+    assert summary.reference.eq('').all()
+    np.testing.assert_allclose(summary.plot_z, summary.z)
+
+
+def test_main_always_writes_summary_beside_pdf_without_systematics(tmp_path, monkeypatch):
+    import sys
+    import plot_nuclear_dependence as plotting
+    out = tmp_path / 'plots' / 'selected.pdf'
+    monkeypatch.setattr(plotting, '_load_all', lambda *args: sample())
+    monkeypatch.setattr(sys, 'argv', ['plot_nuclear_dependence.py', '--targets', 'C',
+                                     '--reference', 'missing', '--particle', 'pi+',
+                                     '--x', '.25', '--output', str(out)])
+    plotting.main()
+    assert out.exists()
+    summary = pd.read_csv(out.with_name('selected_summary.csv'))
+    assert len(summary) == 2
+    np.testing.assert_allclose(summary.value, .3)
